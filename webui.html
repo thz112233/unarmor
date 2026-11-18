@@ -116,6 +116,11 @@
     width:100%;background:#0d1117;color:var(--txt);border:1px solid var(--line);
     border-radius:9px;padding:9px 10px;font:13px/1.4 inherit;margin-top:6px;outline:none;resize:vertical}
   #store .card textarea:focus, #store .card input:focus{border-color:var(--acc)}
+  #catBar{display:flex;gap:7px;overflow-x:auto;padding-bottom:10px;scrollbar-width:none}
+  #catBar::-webkit-scrollbar{display:none}
+  .catbtn{flex:none;background:#161b22;border:1px solid var(--line);color:var(--dim);
+    border-radius:999px;padding:6px 13px;font-size:13px;cursor:pointer}
+  .catbtn.on{background:var(--acc);border-color:var(--acc);color:#06121f;font-weight:600}
   .cfgbox button{background:#21262d;border:1px solid var(--line);color:var(--txt);
     border-radius:9px;padding:8px;font-size:13px;cursor:pointer}
   .cfgbox button:active{background:#2d333b}
@@ -171,10 +176,25 @@
 
 <div id="store" class="hide">
   <div class="card">
-    <h2>插件广场</h2>
-    <p class="sub">装上之后会出现在输入框上方，点一下就填进输入框</p>
+    <h2>插件市场</h2>
+    <p class="sub" id="storeCount">加载中…</p>
+
+    <div class="row" style="margin:0 0 10px">
+      <input id="plugSearch" placeholder="搜索插件" autocomplete="off">
+    </div>
+    <div id="catBar"></div>
     <div id="storeList"></div>
-    <button class="primary" id="storeClose" style="width:100%;margin-top:6px">关闭</button>
+
+    <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    <h3 style="font-size:13px;margin:0 0 8px">插件源</h3>
+    <div id="srcList" style="font-size:12px;color:var(--dim);margin-bottom:8px">内置目录</div>
+    <div class="row">
+      <input id="srcUrl" placeholder="填 registry.json 的地址" autocomplete="off">
+      <button class="primary" id="srcAdd">添加</button>
+    </div>
+    <div id="srcLog" style="font-size:12px;color:var(--acc);margin-top:6px;min-height:14px"></div>
+
+    <button class="primary" id="storeClose" style="width:100%;margin-top:14px">关闭</button>
   </div>
 </div>
 
@@ -458,31 +478,88 @@ function configFields(p){
   return '';
 }
 
+let FILTER_CAT = 'all';
+let SEARCH_Q = '';
+
+function catTabs(){
+  const cats = [];
+  const seen = new Set();
+  PLUGINS.forEach(p => {
+    const key = p.catLabel || p.cat;
+    if (!seen.has(key)){ seen.add(key); cats.push(key); }
+  });
+  const order = ['渠道','增强','编码','写作','分析','翻译','学习','生活','技能'];
+  cats.sort((a,b) => {
+    const ia = order.indexOf(a), ib = order.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+  return cats;
+}
+
+function renderCats(){
+  const bar = $('#catBar');
+  const cats = catTabs();
+  if (!cats.length){ bar.innerHTML = ''; return; }
+  const all = ['all'].concat(cats);
+  bar.innerHTML = all.map(c =>
+    `<button class="catbtn ${FILTER_CAT===c?'on':''}" data-cat="${c}">${c==='all'?'全部':c}</button>`
+  ).join('');
+  bar.querySelectorAll('[data-cat]').forEach(el => {
+    el.onclick = () => { FILTER_CAT = el.dataset.cat; renderStore(); };
+  });
+}
+
 function renderStore(){
   const box = $('#storeList');
   if (!PLUGINS.length){ box.innerHTML = '<p class="sub">先在上面填接入令牌</p>'; return; }
-  const groups = {channel: [], enhancement: []};
-  PLUGINS.forEach(p => (groups[p.cat] || groups.enhancement).push(p));
 
-  box.innerHTML = ['channel','enhancement'].map(cat => {
-    const rows = groups[cat];
-    if (!rows.length) return '';
-    return `<h3 style="font-size:13px;color:var(--dim);margin:14px 0 8px">${catLabel(cat)} · ${rows.length}</h3>` +
-      rows.map(p => {
-        const cfg = p.ready ? configFields(p) : '';
-        return `<div class="pitem" style="flex-direction:column;align-items:stretch">
-          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
-            <div><h4>${p.name}${p.ready ? '' : ' <span style="color:var(--warn);font-size:11px">未接入</span>'}</h4>
-              <p>${p.desc}</p></div>
-            <button data-t="${p.id}" class="${p.enabled ? 'on' : ''}"
-              ${p.ready ? '' : 'disabled style="opacity:.4"'}>${p.enabled ? '已启用' : '启用'}</button>
-          </div>
-          ${cfg ? `<div class="cfgbox" style="margin-top:8px">${cfg}
-            <button data-s="${p.id}" style="width:100%;margin-top:8px;font-size:13px">保存设置</button></div>` : ''}
-        </div>`;
-      }).join('');
+  renderCats();
+  const total = PLUGINS.length;
+  const cats = catTabs().length;
+  $('#storeCount').textContent = `共 ${total} 个插件 · ${cats} 个分类`;
+
+  const q = SEARCH_Q.trim().toLowerCase();
+  let rows = PLUGINS.filter(p => {
+    const key = p.catLabel || p.cat;
+    if (FILTER_CAT !== 'all' && key !== FILTER_CAT) return false;
+    if (!q) return true;
+    return (p.name + ' ' + p.desc).toLowerCase().includes(q);
+  });
+  if (!rows.length){ box.innerHTML = '<p class="sub">没有匹配的插件</p>'; return; }
+
+  box.innerHTML = rows.map(p => {
+    const isPrompt = p.kind === 'prompt' && p.prompt;
+    const isPipe = p.cat === 'enhancement' || p.cat === 'channel';
+    const cfg = (p.ready && isPipe) ? configFields(p) : '';
+    let btn;
+    if (isPrompt){
+      btn = `<button data-use="${p.id}">使用</button>`;
+    } else if (isPipe){
+      btn = `<button data-t="${p.id}" class="${p.enabled?'on':''}"
+        ${p.ready?'':'disabled style="opacity:.4"'}>${p.enabled?'已启用':'启用'}</button>`;
+    } else {
+      btn = `<button disabled style="opacity:.4">未接入</button>`;
+    }
+    const badge = p.source ? `<span style="color:var(--acc);font-size:11px">外部</span>` : '';
+    return `<div class="pitem" style="flex-direction:column;align-items:stretch">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+        <div><h4>${p.name} ${badge}${p.ready?'':' <span style="color:var(--warn);font-size:11px">未接入</span>'}</h4>
+          <p>${p.desc||''}</p></div>${btn}
+      </div>${cfg?`<div class="cfgbox" style="margin-top:8px">${cfg}
+        <button data-s="${p.id}" style="width:100%;margin-top:8px;font-size:13px">保存设置</button></div>`:''}
+    </div>`;
   }).join('');
 
+  box.querySelectorAll('[data-use]').forEach(el => {
+    el.onclick = () => {
+      const p = PLUGINS.find(x => x.id === el.dataset.use);
+      if (!p) return;
+      inp.value = p.prompt;
+      $('#store').classList.add('hide');
+      inp.focus();
+      inp.dispatchEvent(new Event('input'));
+    };
+  });
   box.querySelectorAll('[data-t]').forEach(el => {
     el.onclick = () => {
       const p = PLUGINS.find(x => x.id === el.dataset.t);
@@ -491,8 +568,7 @@ function renderStore(){
   });
   box.querySelectorAll('[data-s]').forEach(el => {
     el.onclick = () => {
-      const card = el.closest('.pitem');
-      const cfg = {};
+      const card = el.closest('.pitem'), cfg = {};
       card.querySelectorAll('[data-cfg]').forEach(f => {
         cfg[f.dataset.cfg] = f.type === 'checkbox' ? f.checked : f.value;
       });
@@ -501,7 +577,52 @@ function renderStore(){
   });
 }
 
-$('#storeBtn').onclick = async () => { await loadPlugins(); renderStore(); $('#store').classList.remove('hide'); };
+// ---- 插件源 ----
+async function loadSources(){
+  const box = $('#srcList');
+  try{
+    const r = await fetch('/api/sources', {headers:{'Authorization':'Bearer ' + TOK}});
+    const j = await r.json();
+    const rows = j.sources || [];
+    if (!rows.length){ box.textContent = '只有内置目录'; return; }
+    box.innerHTML = rows.map(s => {
+      const st = s.error ? `<span style="color:var(--warn)">${s.error.slice(0,40)}</span>` : `${s.count} 个`;
+      return `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.url}</span>
+        <span>${st} <span data-del-src="${s.url}" style="color:var(--warn);cursor:pointer">删</span></span></div>`;
+    }).join('');
+    box.querySelectorAll('[data-del-src]').forEach(el => {
+      el.onclick = async () => {
+        await fetch('/api/sources/delete', {method:'POST',
+          headers:{'Content-Type':'application/json','Authorization':'Bearer ' + TOK},
+          body: JSON.stringify({url: el.dataset.delSrc})});
+        loadSources(); loadPlugins().then(renderStore);
+      };
+    });
+  }catch(e){ box.textContent = '读取失败：' + e.message; }
+}
+
+async function addSource(){
+  const url = $('#srcUrl').value.trim();
+  const out = $('#srcLog');
+  if (!url){ out.textContent = '先填地址'; return; }
+  out.textContent = '拉取中…';
+  try{
+    const r = await fetch('/api/sources', {method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer ' + TOK},
+      body: JSON.stringify({url})});
+    const j = await r.json();
+    if (!r.ok){ out.textContent = '失败：' + (j.error||'').slice(0,120); return; }
+    out.textContent = `已添加，拉取到 ${j.count} 个插件`;
+    $('#srcUrl').value = '';
+    await loadPlugins(); loadSources(); renderStore();
+  }catch(e){ out.textContent = '失败：' + e.message; }
+}
+
+$('#srcAdd').onclick = addSource;
+$('#plugSearch').oninput = e => { SEARCH_Q = e.target.value; renderStore(); };
+
+$('#storeBtn').onclick = async () => { await loadPlugins(); loadSources(); renderStore(); $('#store').classList.remove('hide'); };
 $('#storeClose').onclick = () => $('#store').classList.add('hide');
 
 // 首次渲染

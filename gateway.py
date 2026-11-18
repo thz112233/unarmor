@@ -31,6 +31,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "eval"))
 from refusal import is_blocked, score  # noqa: E402
 
+try:
+    import catalog as _catalog
+    PROMPT_CATALOG = _catalog.as_plugins()
+except Exception:
+    PROMPT_CATALOG = []
+
 # ---------------------------------------------------------------- 连接层配置
 HOST = os.environ.get("GW_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", os.environ.get("GW_PORT", "8787")))
@@ -296,6 +302,15 @@ PLUGIN_CATALOG = [
 ]
 
 
+PIPELINE_IDS = {p["id"] for p in PLUGIN_CATALOG}
+
+
+def all_catalog():
+    """管线插件 + 内置 prompt 插件，管线那批排前面。"""
+    return list(PLUGIN_CATALOG) + [p for p in PROMPT_CATALOG
+                                   if p["id"] not in {q["id"] for q in PLUGIN_CATALOG}]
+
+
 def load_plugins():
     """配置文件只存开关和参数，目录永远以代码里的为准。"""
     try:
@@ -303,7 +318,7 @@ def load_plugins():
     except Exception:
         raw = {}
     out = []
-    for d in PLUGIN_CATALOG:
+    for d in all_catalog():
         st = raw.get(d["id"], {})
         item = dict(d)
         item["enabled"] = bool(st.get("enabled", False))
@@ -312,6 +327,62 @@ def load_plugins():
         item["config"] = cfg
         out.append(item)
     return out
+
+
+SOURCES_FILE = os.path.join(HERE, "out", "sources.json")
+_SRC_CACHE = {}
+
+
+def load_sources():
+    try:
+        return json.load(open(SOURCES_FILE))
+    except Exception:
+        return []
+
+
+def save_sources(rows):
+    os.makedirs(os.path.dirname(SOURCES_FILE), exist_ok=True)
+    tmp = SOURCES_FILE + ".tmp"
+    json.dump(rows, open(tmp, "w"), ensure_ascii=False, indent=1)
+    os.replace(tmp, SOURCES_FILE)
+
+
+def fetch_source(url, ttl=300):
+    """拉一个外部注册表，按 ttl 缓存。返回 (plugins, error)。"""
+    now = time.time()
+    hit = _SRC_CACHE.get(url)
+    if hit and now - hit[0] < ttl:
+        return hit[1], None
+    try:
+        req = urllib.request.Request(url)
+        req.add_header("Accept", "application/json")
+        with urllib.request.urlopen(req, timeout=15) as r:
+            raw = json.loads(r.read().decode())
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
+
+    rows = raw.get("plugins") if isinstance(raw, dict) else raw
+    if not isinstance(rows, list):
+        return [], "格式不对：需要 {\"plugins\": [...]} 或直接一个数组"
+
+    out = []
+    for i, p in enumerate(rows):
+        if not isinstance(p, dict) or not p.get("name"):
+            continue
+        pid = str(p.get("id") or f"src{i}")
+        out.append({
+            "id": pid,
+            "name": str(p["name"])[:40],
+            "desc": str(p.get("desc") or p.get("description") or "")[:200],
+            "cat": str(p.get("cat") or p.get("category") or "external"),
+            "catLabel": str(p.get("catLabel") or p.get("category") or "外部源"),
+            "kind": "prompt" if p.get("prompt") else "info",
+            "ready": bool(p.get("prompt")),
+            "prompt": str(p.get("prompt") or ""),
+            "source": url,
+        })
+    _SRC_CACHE[url] = (now, out)
+    return out, None
 
 
 def save_plugins(items):
@@ -324,7 +395,8 @@ def save_plugins(items):
 
 
 def _active():
-    return {p["id"]: p for p in load_plugins() if p["enabled"] and p["ready"]}
+    return {p["id"]: p for p in load_plugins()
+            if p["enabled"] and p["ready"] and p["id"] in PIPELINE_IDS}
 
 
 def apply_request_plugins(body):
@@ -574,7 +646,25 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/plugins":
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
-            return self._json(200, {"plugins": load_plugins()})
+            rows = load_plugins()
+            errors = []
+            for src in load_sources():
+                extra, err = fetch_source(src["url"])
+                if err:
+                    errors.append({"url": src["url"], "error": err[:160]})
+                rows.extend(extra)
+            return self._json(200, {"plugins": rows, "errors": errors,
+                                    "counts": {"builtin": len(load_plugins()),
+                                               "total": len(rows)}})
+        if path == "/api/sources":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            out = []
+            for src in load_sources():
+                extra, err = fetch_source(src["url"])
+                out.append({"url": src["url"], "name": src.get("name") or src["url"],
+                            "count": len(extra), "error": err})
+            return self._json(200, {"sources": out})
         if path == "/api/providers":
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
@@ -611,6 +701,36 @@ class Handler(BaseHTTPRequestHandler):
             rows, _ = filter_models(rows)
             return self._json(200, {"object": "list", "data": rows})
         self._json(404, {"error": "not found"})
+
+    def _handle_source(self, path):
+        if not self._auth_ok():
+            return self._json(401, {"error": "unauthorized"})
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            body = {}
+        rows = load_sources()
+
+        if path.endswith("/delete"):
+            url = body.get("url")
+            rows = [r for r in rows if r.get("url") != url]
+            save_sources(rows)
+            _SRC_CACHE.pop(url, None)
+            return self._json(200, {"ok": True, "sources": rows})
+
+        url = (body.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return self._json(400, {"error": "要 http(s) 开头的地址"})
+        probe, err = fetch_source(url, ttl=0)
+        if err:
+            return self._json(400, {"error": "拉取失败：" + err})
+        if not probe:
+            return self._json(400, {"error": "这个地址里没有可用的插件条目"})
+        rows = [r for r in rows if r.get("url") != url]
+        rows.append({"url": url, "name": body.get("name") or url.split("/")[-1]})
+        save_sources(rows)
+        return self._json(200, {"ok": True, "count": len(probe), "sources": rows})
 
     def _handle_plugin(self, path):
         if not self._auth_ok():
@@ -720,6 +840,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path in ("/api/sources", "/api/sources/delete"):
+            return self._handle_source(path)
         if path in ("/api/plugins/toggle", "/api/plugins/config"):
             return self._handle_plugin(path)
         if path in ("/api/providers", "/api/providers/delete"):
