@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unarmor Gateway —— 破甲代理 + 跨设备连接层。
+"""小汐鲸 (Unarmor) Gateway —— 破甲代理 + 跨设备连接层。
 
 分两层：
   连接层  —— 对外监听、令牌鉴权、手机网页面板、启动横幅与二维码。
@@ -16,6 +16,7 @@ DeepSeek、OpenAI，或远程 API。
 """
 import json
 import os
+import re
 import secrets
 import socket
 import sys
@@ -246,12 +247,159 @@ def extract(resp):
         return ""
 
 
+# ---------------------------------------------------------------- 插件引擎
+PLUGINS_FILE = os.path.join(HERE, "out", "plugins.json")
+
+# 内置插件目录，结构对齐 DSH Go：channel 负责接谁，enhancement 负责改请求/输出
+PLUGIN_CATALOG = [
+    # ---- 渠道 ----
+    {"id": "openai-compatible", "name": "OpenAI 兼容", "cat": "channel", "ready": True,
+     "desc": "任意 OpenAI 兼容的 /chat/completions 服务，OpenAI、Ollama、vLLM 都算"},
+    {"id": "anthropic-compatible", "name": "Anthropic 兼容", "cat": "channel", "ready": False,
+     "desc": "指向任意 /v1/messages 服务，需要单独的协议转换层"},
+    {"id": "ai-studio", "name": "Google AI Studio", "cat": "channel", "ready": False,
+     "desc": "用本人账号走浏览器桥，需要上游启动器配合"},
+    {"id": "gemini-web", "name": "Gemini Web", "cat": "channel", "ready": False,
+     "desc": "用本人 Gemini 账号，需要浏览器桥与 PoW 转换"},
+    {"id": "deepseek-web", "name": "DeepSeek Web", "cat": "channel", "ready": False,
+     "desc": "用本人 DeepSeek 账号，需要浏览器桥"},
+    {"id": "muse-web", "name": "Muse Web", "cat": "channel", "ready": False,
+     "desc": "用本人 Muse 账号，需要浏览器桥"},
+    {"id": "deepai-code", "name": "DeepAI Code", "cat": "channel", "ready": False,
+     "desc": "直连 DeepAI Code，需要 API Key 与设备指纹"},
+    {"id": "amd-cloud", "name": "AMD Radeon Cloud", "cat": "channel", "ready": False,
+     "desc": "用 AMD Radeon Cloud 的 Key，动态读取可用模型"},
+    {"id": "kilo-free", "name": "Kilo Free", "cat": "channel", "ready": False,
+     "desc": "Kilo 网关的免费通道，无需 Key"},
+
+    # ---- 增强 ----
+    {"id": "system-prompt", "name": "系统提示", "cat": "enhancement", "ready": True,
+     "desc": "给每一轮请求前置一段系统提示",
+     "config": {"prompt": ""}},
+    {"id": "param-override", "name": "参数覆盖", "cat": "enhancement", "ready": True,
+     "desc": "限制 max_tokens 上限，可选择丢弃 temperature",
+     "config": {"max_tokens": "", "drop_temperature": False}},
+    {"id": "output-cleaner", "name": "工具输出清理", "cat": "enhancement", "ready": True,
+     "desc": "去掉 ANSI 控制序列，把连续重复的进度行折成一行",
+     "config": {}},
+    {"id": "model-filter", "name": "模型过滤", "cat": "enhancement", "ready": True,
+     "desc": "按逗号分隔的关键词，把模型列表里命中的条目藏掉",
+     "config": {"hide": ""}},
+    {"id": "context-compression", "name": "上下文压缩", "cat": "enhancement", "ready": False,
+     "desc": "调用外部压缩管线，保护系统提示与最近一轮"},
+    {"id": "context-folding", "name": "可恢复上下文折叠", "cat": "enhancement", "ready": False,
+     "desc": "折叠已归档的长片段，按需回读原文"},
+    {"id": "history-recall", "name": "本机历史召回", "cat": "enhancement", "ready": False,
+     "desc": "检索本机会话，把命中内容作为不可信参考附到本轮"},
+    {"id": "web-search", "name": "多源网页搜索", "cat": "enhancement", "ready": False,
+     "desc": "以 [search] 开头时才触发，普通对话不外发"},
+]
+
+
+def load_plugins():
+    """配置文件只存开关和参数，目录永远以代码里的为准。"""
+    try:
+        raw = json.load(open(PLUGINS_FILE))
+    except Exception:
+        raw = {}
+    out = []
+    for d in PLUGIN_CATALOG:
+        st = raw.get(d["id"], {})
+        item = dict(d)
+        item["enabled"] = bool(st.get("enabled", False))
+        cfg = dict(d.get("config") or {})
+        cfg.update(st.get("config") or {})
+        item["config"] = cfg
+        out.append(item)
+    return out
+
+
+def save_plugins(items):
+    data = {p["id"]: {"enabled": p.get("enabled", False),
+                      "config": p.get("config") or {}} for p in items}
+    os.makedirs(os.path.dirname(PLUGINS_FILE), exist_ok=True)
+    tmp = PLUGINS_FILE + ".tmp"
+    json.dump(data, open(tmp, "w"), ensure_ascii=False, indent=1)
+    os.replace(tmp, PLUGINS_FILE)
+
+
+def _active():
+    return {p["id"]: p for p in load_plugins() if p["enabled"] and p["ready"]}
+
+
+def apply_request_plugins(body):
+    """出站前改写。返回 (新 body, 生效的插件 id 列表)。"""
+    act = _active()
+    used = []
+
+    sp = (act.get("system-prompt", {}).get("config", {}).get("prompt") or "").strip()
+    if sp:
+        msgs = list(body.get("messages") or [])
+        if msgs and msgs[0].get("role") == "system":
+            msgs[0] = {"role": "system", "content": sp + "\n\n" + (msgs[0].get("content") or "")}
+        else:
+            msgs.insert(0, {"role": "system", "content": sp})
+        body["messages"] = msgs
+        used.append("system-prompt")
+
+    po = act.get("param-override", {}).get("config", {})
+    if po:
+        cap = po.get("max_tokens")
+        try:
+            cap = int(cap)
+        except (TypeError, ValueError):
+            cap = None
+        if cap:
+            cur = body.get("max_tokens")
+            body["max_tokens"] = min(int(cur), cap) if isinstance(cur, int) else cap
+            used.append("param-override")
+        if po.get("drop_temperature"):
+            body.pop("temperature", None)
+            if "param-override" not in used:
+                used.append("param-override")
+    return body, used
+
+
+def apply_response_plugins(text):
+    act = _active()
+    used = []
+    if "output-cleaner" in act:
+        text = clean_output(text)
+        used.append("output-cleaner")
+    return text, used
+
+
+def clean_output(t: str) -> str:
+    t = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", t)
+    lines = t.split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        ln = lines[i]
+        j = i
+        while j + 1 < len(lines) and lines[j + 1] == ln and ln.strip():
+            j += 1
+        out.append(f"{ln}  ×{j - i + 1}" if j > i else ln)
+        i = j + 1
+    return "\n".join(out)
+
+
+def filter_models(rows):
+    act = _active()
+    hide = (act.get("model-filter", {}).get("config", {}).get("hide") or "").strip()
+    if not hide:
+        return rows, []
+    keys = [k.strip().lower() for k in hide.split(",") if k.strip()]
+    kept = [r for r in rows if not any(k in str(r.get("id", "")).lower() for k in keys)]
+    return kept, ["model-filter"]
+
+
 def run_chain(body):
     trace = []
     best = ("", "none")
     if not UPSTREAMS:
         return ("未配置上游。设置 UPSTREAM_BASE / UPSTREAM_MODEL 后重启，"
-                "或先在本机启动 Ollama / LM Studio。"), "no-upstream", trace
+                "或先在本机启动 Ollama / LM Studio。"), "no-upstream", trace, []
+    body, used = apply_request_plugins(body)
     for i in range(MAX_TRIES):
         strat = STRATEGIES[i % len(STRATEGIES)]
         up = UPSTREAMS[i % len(UPSTREAMS)]
@@ -262,14 +410,18 @@ def run_chain(body):
         txt = extract(resp)
         if strat["prefill"]:
             txt = strat["prefill"] + txt
+        txt, u2 = apply_response_plugins(txt)
+        for x in u2:
+            if x not in used:
+                used.append(x)
         sc = score(txt)
         trace.append({"i": i, "strategy": strat["name"], "verdict": sc["verdict"],
                       "len": len(txt), "head": sc["head"]})
         if not is_blocked(txt) and sc["verdict"] not in ("refuse", "empty"):
-            return txt, strat["name"], trace
+            return txt, strat["name"], trace, used
         if len(txt) > len(best[0]):
             best = (txt, strat["name"])
-    return best[0], best[1], trace
+    return best[0], best[1], trace, used
 
 
 # ---------------------------------------------------------------- 启动横幅
@@ -323,7 +475,7 @@ def banner():
     up = UPSTREAMS[0] if UPSTREAMS else None
     line = "─" * 46
     print(f"\n┌{line}┐")
-    print("│ Unarmor 网关已启动".ljust(45) + "│")
+    print("│ 小汐鲸 网关已启动".ljust(45) + "│")
     print(f"├{line}┤")
     print(f"│ 电脑本机  {local:<33}│")
     print(f"│ 手机访问  {phone:<33}│")
@@ -359,7 +511,7 @@ def banner():
 # ---------------------------------------------------------------- HTTP
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "Unarmor/1.0"
+    server_version = "Xiaoxijing/1.0"
 
     def log_message(self, *a):
         pass
@@ -419,6 +571,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if path == "/api/plugins":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            return self._json(200, {"plugins": load_plugins()})
         if path == "/api/providers":
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
@@ -433,7 +589,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
             up = UPSTREAMS[0] if UPSTREAMS else {"base": "http://127.0.0.1:11434/v1", "key": ""}
-            return self._json(200, {"models": list_models(up["base"], up.get("key", "")),
+            rows, _fm = filter_models(list_models(up["base"], up.get("key", "")))
+            return self._json(200, {"models": rows,
                                     "pullable": bool(UPSTREAMS) and "ollama" in json.dumps(UPSTREAMS).lower()
                                                  or any("11434" in u["base"] for u in UPSTREAMS)})
         if path == "/api/info":
@@ -449,9 +606,35 @@ class Handler(BaseHTTPRequestHandler):
         if path.rstrip("/").endswith("/models"):
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
-            return self._json(200, {"object": "list", "data": [
-                {"id": u["model"] or "auto", "object": "model"} for u in UPSTREAMS]})
+            rows = [{"id": u["model"] or "auto", "object": "model", "size": None}
+                    for u in UPSTREAMS]
+            rows, _ = filter_models(rows)
+            return self._json(200, {"object": "list", "data": rows})
         self._json(404, {"error": "not found"})
+
+    def _handle_plugin(self, path):
+        if not self._auth_ok():
+            return self._json(401, {"error": "unauthorized"})
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            body = {}
+        items = load_plugins()
+        pid = body.get("id")
+        target = next((p for p in items if p["id"] == pid), None)
+        if not target:
+            return self._json(404, {"error": "没有这个插件"})
+        if path.endswith("/toggle"):
+            if not target["ready"]:
+                return self._json(400, {"error": "这个插件依赖外部服务，当前版本没接入"})
+            target["enabled"] = bool(body.get("enabled"))
+        else:
+            cfg = dict(target.get("config") or {})
+            cfg.update(body.get("config") or {})
+            target["config"] = cfg
+        save_plugins(items)
+        return self._json(200, {"ok": True, "plugins": items})
 
     def _handle_provider(self, path):
         """云端模型：加一个 OpenAI 兼容端点，或删掉一个。"""
@@ -537,6 +720,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path in ("/api/plugins/toggle", "/api/plugins/config"):
+            return self._handle_plugin(path)
         if path in ("/api/providers", "/api/providers/delete"):
             return self._handle_provider(path)
         if path == "/api/pull":
@@ -552,13 +737,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "bad json"})
         want_stream = bool(body.get("stream"))
         t0 = time.time()
-        txt, strat, trace = run_chain(body)
+        txt, strat, trace, used_plugins = run_chain(body)
         elapsed = round(time.time() - t0, 2)
         sc = score(txt)
         log({"ts": time.time(), "strategy": strat, "verdict": sc["verdict"],
              "tries": len(trace), "elapsed": elapsed,
              "prompt": (body.get("messages") or [{}])[-1].get("content", "")[:160],
-             "trace": trace})
+             "plugins": used_plugins, "trace": trace})
 
         if not want_stream:
             return self._json(200, {
@@ -567,7 +752,8 @@ class Handler(BaseHTTPRequestHandler):
                 "choices": [{"index": 0, "finish_reason": "stop",
                              "message": {"role": "assistant", "content": txt}}],
                 "x_gateway": {"strategy": strat, "tries": len(trace),
-                              "verdict": sc["verdict"], "elapsed": elapsed},
+                              "verdict": sc["verdict"], "elapsed": elapsed,
+                              "plugins": used_plugins},
             })
 
         self.send_response(200)

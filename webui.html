@@ -8,9 +8,9 @@
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Unarmor">
+<meta name="apple-mobile-web-app-title" content="小汐鲸">
 <meta name="mobile-web-app-capable" content="yes">
-<title>Unarmor</title>
+<title>小汐鲸</title>
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --line:#243040; --txt:#e6edf3;
@@ -112,12 +112,19 @@
   .pitem button{padding:7px 12px;font-size:13px;flex:none}
   .pitem button.on{background:#20452c;border-color:#2d6a3f;color:#3fb950}
   #provList .mitem span:last-child{color:var(--warn);cursor:pointer}
+  #store .card textarea, #store .card input[type=text]{
+    width:100%;background:#0d1117;color:var(--txt);border:1px solid var(--line);
+    border-radius:9px;padding:9px 10px;font:13px/1.4 inherit;margin-top:6px;outline:none;resize:vertical}
+  #store .card textarea:focus, #store .card input:focus{border-color:var(--acc)}
+  .cfgbox button{background:#21262d;border:1px solid var(--line);color:var(--txt);
+    border-radius:9px;padding:8px;font-size:13px;cursor:pointer}
+  .cfgbox button:active{background:#2d333b}
 </style>
 </head>
 <body>
 <header>
   <div class="dot" id="dot"></div>
-  <b>Unarmor</b>
+  <b>小汐鲸</b>
   <div id="meta">连接中…</div>
   <button id="btnSetup" style="padding:6px 10px;font-size:12px">设置</button>
 </header>
@@ -158,8 +165,7 @@
 
     <hr>
     <h3>插件</h3>
-    <div id="pluginInstalled"><span class="dim">还没有安装</span></div>
-    <button id="storeBtn" style="width:100%;margin-top:10px">打开插件广场</button>
+    <button id="storeBtn" style="width:100%">打开插件广场</button>
   </div>
 </div>
 
@@ -314,8 +320,7 @@ $('#pullBtn').onclick = doPull;
 $('#btnSetup').onclick = () => {
   $('#tokInp').value = TOK;
   $('#setup').classList.remove('hide');
-  if (TOK){ loadModels(); loadProviders(); }
-  renderPlugins();
+  if (TOK){ loadModels(); loadProviders(); loadPlugins(); }
 };
 $('#tokSave').onclick = () => {
   TOK = $('#tokInp').value.trim();
@@ -380,75 +385,127 @@ async function addProvider(){
 
 $('#provAdd').onclick = addProvider;
 
-// ---------------------------------------------------------------- 插件
-const STORE = [
-  {id:'summarize', name:'总结',      desc:'把最近的内容压成三句话',        prompt:'用三句话总结上面的内容'},
-  {id:'translate', name:'译成英文',  desc:'把上一条回复翻成英文',          prompt:'把上一条回复翻译成英文，只输出译文'},
-  {id:'explain',   name:'解释代码',  desc:'逐行解释代码在做什么',          prompt:'逐行解释上面的代码在做什么'},
-  {id:'steps',     name:'拆步骤',    desc:'把方案拆成可执行步骤',          prompt:'把上面的方案拆成编号步骤，每步一句话'},
-  {id:'review',    name:'挑毛病',    desc:'指出问题并按严重度排序',        prompt:'指出上面内容里的问题，按严重程度排序'},
-  {id:'compare',   name:'做对比',    desc:'把选项列成对比表',              prompt:'把上面的选项做成对比表，列出关键差异'},
-  {id:'tldr',      name:'一句话',    desc:'压成一句',                      prompt:'用一句话概括'},
-];
+// ---------------------------------------------------------------- 插件广场
+let PLUGINS = [];
 
-const PKEY = 'unarmor_plugins';
-function installed(){
+function catLabel(c){ return c === 'channel' ? '渠道' : '增强'; }
+
+async function loadPlugins(){
   try{
-    const v = JSON.parse(localStorage.getItem(PKEY));
-    if (Array.isArray(v)) return v;
-  }catch(e){}
-  return ['summarize','translate','explain'];
+    const r = await fetch('/api/plugins', {headers:{'Authorization':'Bearer ' + TOK}});
+    if (r.status === 401){ PLUGINS = []; renderPluginBar(); return; }
+    const j = await r.json();
+    PLUGINS = j.plugins || [];
+  }catch(e){ PLUGINS = []; }
+  renderPluginBar();
 }
-function saveInstalled(ids){ localStorage.setItem(PKEY, JSON.stringify(ids)); renderCapsules(); }
 
-function renderCapsules(){
-  const bar = $('#capsules'), ids = installed();
-  const rows = STORE.filter(p => ids.includes(p.id));
-  bar.innerHTML = rows.map(p =>
-    `<button class="capsule" data-p="${p.id}">${p.name}</button>`).join('');
-  bar.querySelectorAll('[data-p]').forEach(el => {
-    el.onclick = () => {
-      const p = STORE.find(x => x.id === el.dataset.p);
-      if (!p) return;
-      inp.value = p.prompt;
-      inp.focus();
-      inp.dispatchEvent(new Event('input'));
-    };
+function renderPluginBar(){
+  const bar = $('#capsules');
+  const on = PLUGINS.filter(p => p.enabled);
+  if (!on.length){ bar.innerHTML = ''; return; }
+  bar.innerHTML = on.map(p => `<button class="capsule" data-open="1">${p.name}</button>`).join('');
+  bar.querySelectorAll('[data-open]').forEach(el => {
+    el.onclick = () => { renderStore(); $('#store').classList.remove('hide'); };
   });
 }
 
-function renderPlugins(){
-  const box = $('#pluginInstalled'), ids = installed();
-  const rows = STORE.filter(p => ids.includes(p.id));
-  box.innerHTML = rows.length
-    ? rows.map(p => `<div class="mitem"><span>${p.name}</span><span class="dim">${p.desc}</span></div>`).join('')
-    : '<span class="dim">还没有安装</span>';
+async function togglePlugin(id, enabled, btn){
+  btn.disabled = true;
+  try{
+    const r = await fetch('/api/plugins/toggle', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer ' + TOK},
+      body: JSON.stringify({id, enabled})
+    });
+    const j = await r.json();
+    if (!r.ok){ alert(j.error || '切换失败'); return; }
+    PLUGINS = j.plugins;
+    renderStore(); renderPluginBar();
+  }catch(e){ alert('失败：' + e.message); }
+  finally{ btn.disabled = false; }
+}
+
+async function savePluginConfig(id, config, out){
+  try{
+    const r = await fetch('/api/plugins/config', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer ' + TOK},
+      body: JSON.stringify({id, config})
+    });
+    const j = await r.json();
+    PLUGINS = j.plugins || PLUGINS;
+    if (out) out.textContent = '已保存';
+  }catch(e){ if (out) out.textContent = '保存失败：' + e.message; }
+}
+
+function configFields(p){
+  const c = p.config || {};
+  if (p.id === 'system-prompt'){
+    return `<textarea data-cfg="prompt" rows="2" placeholder="例如：回答一律用中文，只给结论">${c.prompt || ''}</textarea>`;
+  }
+  if (p.id === 'param-override'){
+    return `<div class="row" style="margin-top:8px">
+      <input data-cfg="max_tokens" placeholder="max_tokens 上限" value="${c.max_tokens || ''}">
+      <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:6px">
+        <input type="checkbox" data-cfg="drop_temperature" ${c.drop_temperature ? 'checked' : ''}
+          style="width:auto;margin:0"> 丢温度
+      </label></div>`;
+  }
+  if (p.id === 'model-filter'){
+    return `<input data-cfg="hide" placeholder="隐藏含这些词的模型，逗号分隔" value="${c.hide || ''}">`;
+  }
+  return '';
 }
 
 function renderStore(){
-  const box = $('#storeList'), ids = installed();
-  box.innerHTML = STORE.map(p => {
-    const on = ids.includes(p.id);
-    return `<div class="pitem"><div><h4>${p.name}</h4><p>${p.desc}</p></div>` +
-           `<button data-t="${p.id}" class="${on ? 'on' : ''}">${on ? '已装' : '安装'}</button></div>`;
+  const box = $('#storeList');
+  if (!PLUGINS.length){ box.innerHTML = '<p class="sub">先在上面填接入令牌</p>'; return; }
+  const groups = {channel: [], enhancement: []};
+  PLUGINS.forEach(p => (groups[p.cat] || groups.enhancement).push(p));
+
+  box.innerHTML = ['channel','enhancement'].map(cat => {
+    const rows = groups[cat];
+    if (!rows.length) return '';
+    return `<h3 style="font-size:13px;color:var(--dim);margin:14px 0 8px">${catLabel(cat)} · ${rows.length}</h3>` +
+      rows.map(p => {
+        const cfg = p.ready ? configFields(p) : '';
+        return `<div class="pitem" style="flex-direction:column;align-items:stretch">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+            <div><h4>${p.name}${p.ready ? '' : ' <span style="color:var(--warn);font-size:11px">未接入</span>'}</h4>
+              <p>${p.desc}</p></div>
+            <button data-t="${p.id}" class="${p.enabled ? 'on' : ''}"
+              ${p.ready ? '' : 'disabled style="opacity:.4"'}>${p.enabled ? '已启用' : '启用'}</button>
+          </div>
+          ${cfg ? `<div class="cfgbox" style="margin-top:8px">${cfg}
+            <button data-s="${p.id}" style="width:100%;margin-top:8px;font-size:13px">保存设置</button></div>` : ''}
+        </div>`;
+      }).join('');
   }).join('');
+
   box.querySelectorAll('[data-t]').forEach(el => {
     el.onclick = () => {
-      const id = el.dataset.t;
-      let cur = installed();
-      cur = cur.includes(id) ? cur.filter(x => x !== id) : cur.concat(id);
-      saveInstalled(cur);
-      renderStore(); renderPlugins();
+      const p = PLUGINS.find(x => x.id === el.dataset.t);
+      togglePlugin(p.id, !p.enabled, el);
+    };
+  });
+  box.querySelectorAll('[data-s]').forEach(el => {
+    el.onclick = () => {
+      const card = el.closest('.pitem');
+      const cfg = {};
+      card.querySelectorAll('[data-cfg]').forEach(f => {
+        cfg[f.dataset.cfg] = f.type === 'checkbox' ? f.checked : f.value;
+      });
+      savePluginConfig(el.dataset.s, cfg, el);
     };
   });
 }
 
-$('#storeBtn').onclick = () => { renderStore(); $('#store').classList.remove('hide'); };
+$('#storeBtn').onclick = async () => { await loadPlugins(); renderStore(); $('#store').classList.remove('hide'); };
 $('#storeClose').onclick = () => $('#store').classList.add('hide');
 
 // 首次渲染
-renderCapsules();
-renderPlugins();
+loadPlugins();
 
 // 注册离线壳，装到桌面后可以全屏打开
 if ('serviceWorker' in navigator) {
