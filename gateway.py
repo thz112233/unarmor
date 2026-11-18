@@ -103,6 +103,46 @@ if not UPSTREAMS:
         except Exception:
             continue
 
+def ollama_base():
+    """找出哪一个上游是 Ollama。拉模型只能走它的原生接口。"""
+    for u in UPSTREAMS:
+        b = u["base"]
+        if "11434" in b or "ollama" in b.lower():
+            return b[:-3] if b.endswith("/v1") else b
+    if UPSTREAMS:
+        b = UPSTREAMS[0]["base"]
+        return b[:-3] if b.endswith("/v1") else b
+    return "http://127.0.0.1:11434"
+
+
+def list_models(base, key=""):
+    """先问 /v1/models，Ollama 再问 /api/tags 拿尺寸信息。"""
+    b = base.rstrip("/")
+    root = b[:-3] if b.endswith("/v1") else b      # Ollama 原生接口在根路径
+    out = []
+    try:
+        req = urllib.request.Request(b + "/models")
+        if key:
+            req.add_header("Authorization", "Bearer " + key)
+        with urllib.request.urlopen(req, timeout=8) as r:
+            for m in json.loads(r.read().decode()).get("data", []):
+                out.append({"id": m.get("id"), "size": None})
+    except Exception:
+        pass
+    try:
+        with urllib.request.urlopen(root + "/api/tags", timeout=8) as r:
+            for m in json.loads(r.read().decode()).get("models", []):
+                nm = m.get("name")
+                for row in out:
+                    if row["id"] == nm:
+                        row["size"] = m.get("size")
+                if not any(x["id"] == nm for x in out):
+                    out.append({"id": nm, "size": m.get("size")})
+    except Exception:
+        pass
+    return out
+
+
 # ---------------------------------------------------------------- 策略层
 STRATEGIES = [
     {"name": "plain",         "prefill": None,  "temp": 0.7},
@@ -339,6 +379,13 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if path == "/api/models":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            up = UPSTREAMS[0] if UPSTREAMS else {"base": "http://127.0.0.1:11434/v1", "key": ""}
+            return self._json(200, {"models": list_models(up["base"], up.get("key", "")),
+                                    "pullable": bool(UPSTREAMS) and "ollama" in json.dumps(UPSTREAMS).lower()
+                                                 or any("11434" in u["base"] for u in UPSTREAMS)})
         if path == "/api/info":
             return self._json(200, {
                 "model": UPSTREAMS[0]["model"] if UPSTREAMS else None,
@@ -356,8 +403,48 @@ class Handler(BaseHTTPRequestHandler):
                 {"id": u["model"] or "auto", "object": "model"} for u in UPSTREAMS]})
         self._json(404, {"error": "not found"})
 
+    def _handle_pull(self):
+        """把 Ollama 的 /api/pull 原样转出去，边下边把进度回给前端。"""
+        if not self._auth_ok():
+            return self._json(401, {"error": "unauthorized"})
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            body = {}
+        name = (body.get("name") or "").strip()
+        if not name:
+            return self._json(400, {"error": "缺少模型名"})
+        base = ollama_base()
+        url = base.rstrip("/") + "/api/pull"
+        req = urllib.request.Request(
+            url, data=json.dumps({"name": name, "stream": True}).encode(),
+            method="POST")
+        req.add_header("Content-Type", "application/json")
+        try:
+            upstream = urllib.request.urlopen(req, timeout=7200)
+        except urllib.error.HTTPError as e:
+            return self._json(e.code, {"error": e.read().decode(errors="replace")[:300]})
+        except Exception as e:
+            return self._json(502, {"error": f"上游不可达：{e}。拉模型需要上游是 Ollama。"})
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        try:
+            for line in upstream:
+                if line.strip():
+                    self.wfile.write(line if line.endswith(b"\n") else line + b"\n")
+                    self.wfile.flush()
+        except Exception:
+            pass
+        log({"ts": time.time(), "event": "pull", "name": name, "base": base})
+
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/pull":
+            return self._handle_pull()
         if not path.rstrip("/").endswith("/chat/completions"):
             return self._json(404, {"error": "not found"})
         if not self._auth_ok():

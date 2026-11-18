@@ -80,6 +80,18 @@
   }
   #setup button{width:100%;padding:12px}
   .hide{display:none!important}
+  #setup .card{max-height:86vh;overflow-y:auto}
+  #setup hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+  #setup h3{font-size:14px;margin:0 0 10px;color:var(--txt)}
+  .row{display:flex;gap:8px;margin-top:10px}
+  .row input{flex:1;margin-bottom:0}
+  .row button{white-space:nowrap;padding:11px 16px;width:auto}
+  #modelList{font-size:13px;max-height:150px;overflow-y:auto;border:1px solid var(--line);
+    border-radius:10px;padding:8px 10px;background:#0d1117}
+  .mitem{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1c2430}
+  .mitem:last-child{border-bottom:0}
+  .dim{color:var(--dim)}
+  #pullLog{margin-top:10px;font-size:12px;color:var(--acc);min-height:16px;word-break:break-all}
 </style>
 </head>
 <body>
@@ -103,6 +115,15 @@
     <p id="setupHint">填入电脑上启动时打印的接入令牌。地址已经是当前这台服务器。</p>
     <input id="tokInp" placeholder="令牌 (sk-unarmor-…)" autocomplete="off">
     <button class="primary" id="tokSave">连接</button>
+
+    <hr>
+    <h3>电脑上的模型</h3>
+    <div id="modelList"><span class="dim">打开时自动读取</span></div>
+    <div class="row">
+      <input id="pullName" placeholder="qwen2.5:7b" autocomplete="off">
+      <button class="primary" id="pullBtn">下载</button>
+    </div>
+    <div id="pullLog"></div>
   </div>
 </div>
 
@@ -185,7 +206,71 @@ inp.addEventListener('keydown', e => {
 inp.addEventListener('input', () => {
   inp.style.height = 'auto'; inp.style.height = Math.min(inp.scrollHeight, 130) + 'px';
 });
-$('#btnSetup').onclick = () => { $('#tokInp').value = TOK; $('#setup').classList.remove('hide'); };
+async function loadModels(){
+  const box = $('#modelList');
+  box.innerHTML = '<span class="dim">读取中…</span>';
+  try{
+    const r = await fetch('/api/models', {headers:{'Authorization':'Bearer ' + TOK}});
+    if (r.status === 401){ box.innerHTML = '<span class="dim">令牌不对，先连接</span>'; return; }
+    const j = await r.json();
+    const ms = j.models || [];
+    if (!ms.length){ box.innerHTML = '<span class="dim">上游还没有模型</span>'; return; }
+    box.innerHTML = ms.map(m => {
+      const gb = m.size ? (m.size / 1073741824).toFixed(1) + ' GB' : '';
+      return `<div class="mitem"><span>${m.id}</span><span class="dim">${gb}</span></div>`;
+    }).join('');
+  }catch(e){ box.textContent = '读取失败：' + e.message; }
+}
+
+async function doPull(){
+  const name = $('#pullName').value.trim();
+  const out = $('#pullLog');
+  if (!name){ out.textContent = '先填模型名，比如 qwen2.5:7b'; return; }
+  if (!TOK){ out.textContent = '先填令牌'; return; }
+  out.textContent = '请求下载 ' + name + '…';
+  try{
+    const res = await fetch('/api/pull', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer ' + TOK},
+      body: JSON.stringify({name})
+    });
+    if (!res.ok){
+      const t = await res.text();
+      out.textContent = '失败 ' + res.status + '：' + t.slice(0, 160);
+      return;
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', last = '';
+    while (true){
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const l of lines){
+        if (!l.trim()) continue;
+        let d; try { d = JSON.parse(l); } catch(e){ continue; }
+        if (d.error){ out.textContent = '错误：' + String(d.error).slice(0,160); return; }
+        let msg = d.status || '';
+        if (d.total && d.completed != null){
+          const pct = (d.completed / d.total * 100).toFixed(1);
+          msg += `  ${pct}%  ${(d.completed/1048576).toFixed(0)}/${(d.total/1048576).toFixed(0)} MB`;
+        }
+        if (msg && msg !== last){ out.textContent = msg; last = msg; }
+      }
+    }
+    out.textContent = '完成：' + name;
+    loadModels();
+  }catch(e){ out.textContent = '中断：' + e.message; }
+}
+
+$('#pullBtn').onclick = doPull;
+$('#btnSetup').onclick = () => {
+  $('#tokInp').value = TOK;
+  $('#setup').classList.remove('hide');
+  if (TOK) loadModels();
+};
 $('#tokSave').onclick = () => {
   TOK = $('#tokInp').value.trim();
   localStorage.setItem('unarmor_tok', TOK);

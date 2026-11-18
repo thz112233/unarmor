@@ -127,6 +127,15 @@ UPSTREAM_BASE=http://127.0.0.1:11434/v1 UPSTREAM_MODEL=qwen2.5:7b python gateway
 
 With a discrete GPU (12G VRAM) a 14B Q4 fits entirely in VRAM and runs an order of magnitude faster.
 
+### Pull models from the app
+
+No terminal needed. Open the gateway in a phone browser → top-right "设置" → "电脑上的模型":
+
+- Lists models already on the desktop, with sizes
+- Type a name such as `qwen2.5:7b` and hit download; the percentage updates live
+
+This proxies Ollama's `/api/pull`, so **the upstream must be Ollama**. LM Studio or vLLM can list models but cannot pull new ones.
+
 ### Two knobs to adjust with bigger models
 
 Every retry is a full generation. Irrelevant at 0.5B, painful at 7B+:
