@@ -192,6 +192,28 @@ The refusal direction in 7B is usually more concentrated than in 0.5B, so weight
 
 Extra upstreams: `UPSTREAM_BASE_2`, `UPSTREAM_MODEL_2`, `UPSTREAM_KEY_2`, rotated per request.
 
+## Layout
+
+```
+unarmor/
+├── gateway.py              gateway: connection + strategy + model/provider management (stdlib only)
+├── webui.html              shared UI: chat / settings / plugin store
+├── manifest.json, sw.js    PWA: installs to the home screen
+├── 启动-电脑.bat/.command    one-click start
+├── assets/                 icons, mascot, UI mock
+├── eval/                   probe set and refusal classifier
+├── probe_short.py          local model eval (first 8 tokens only)
+├── probe_api.py            any OpenAI-compatible endpoint, no weights needed
+├── probe_steer.py          activation ablation / logit suppression
+├── abliterate.py           direction extraction and weight surgery
+├── diag_dirs.py            per-layer Cohen's d diagnostics
+├── np_forward.py           numpy forward pass, fallback without torch
+├── multimodal_inject.py    render instructions into images
+├── render_mock.py          generates the UI mock in assets/
+├── mock_upstream.py        fake chat model for pipeline tests
+└── mock_ollama.py          fake Ollama for the pull flow
+```
+
 ## Notes
 
 - The gateway runs on the standard library alone; torch and friends are only needed for the experiments.

@@ -21,6 +21,25 @@
 
 ---
 
+## 功能一览
+
+**连接**
+- 电脑跑模型，手机扫码接入；装到桌面全屏运行，没有地址栏
+- 自动列出局域网地址、二维码配对、令牌鉴权、多上游轮换
+
+**模型**
+- 列出电脑上已有的 Ollama 模型和体积，手机上直接下载并看进度
+- 填接口地址 + Key 接入任意云端模型；保存前先探活，连不上不写入
+
+**策略**
+- assistant prefill、best-of-n 重采样、前置截断、按拒答自动换策略
+
+**插件**
+- 输入框上方的胶囊，七个内置，广场可装卸
+
+**实验**
+- 三套评估器（本地权重 / 云端端点 / 激活干预）+ 权重手术 + 方向诊断
+
 ## 它解决什么问题
 
 模型跑在电脑上、人在手机上，中间缺的从来不是"一个 API"，是这几样：
@@ -267,21 +286,29 @@ Windows 双击 `启动-电脑.bat`，macOS 双击 `启动-电脑.command`。
 
 ```
 unarmor/
-├── gateway.py              网关：连接层 + 策略层（零依赖）
-├── webui.html              手机与电脑共用的界面
-├── manifest.json / sw.js   PWA：装到桌面
-├── assets/                 图标与界面示意图
-├── 启动-电脑.bat / .command  一键启动
+├── gateway.py              网关：连接层 + 策略层 + 模型与云端管理（零第三方依赖）
+├── webui.html              手机与电脑共用的界面：对话 / 设置 / 插件广场
+├── manifest.json / sw.js   PWA：装到桌面全屏运行
+├── 启动-电脑.bat / .command  一键启动，改开头几行即可换模型
+├── assets/
+│   ├── orca-mascot.jpg     角色原图
+│   ├── icon-64/192/512.png 各尺寸图标
+│   ├── apple-touch-icon.png
+│   ├── screenshot-phone.png 界面示意图
+│   └── demo-phone.html     示意图的源文件
 ├── eval/
-│   ├── probes.py           探针集
+│   ├── probes.py           探针集：26 有害 + 20 良性 + 4 去免责声明
 │   └── refusal.py          拒答判定器
-├── probe_short.py          主评估器（开头 8 token）
-├── probe_steer.py          激活消融 / 输出压制
-├── abliterate.py           方向提取 + 权重手术
-├── diag_dirs.py            方向诊断（Cohen's d）
-├── np_forward.py           纯 numpy 前向（无 torch 环境后备）
-├── multimodal_inject.py    指令渲染进图片（多模态通道）
-└── mock_upstream.py        假模型，验证管线不用真模型
+├── probe_short.py          本地模型评估：只生成开头 8 个 token
+├── probe_api.py            云端端点评估：不加载权重，手机也能跑
+├── probe_steer.py          激活消融 / logits 压制 / 两者组合
+├── abliterate.py           方向提取 + 权重手术 + 生成评估
+├── diag_dirs.py            方向诊断：逐层 Cohen's d 与投影分布
+├── np_forward.py           纯 numpy 前向，装不上 torch 时的后备
+├── multimodal_inject.py    把指令渲染进图片（多模态通道）
+├── render_mock.py          生成assets里的界面示意图
+├── mock_upstream.py        假 chat 模型，验证策略链不必用真模型
+└── mock_ollama.py          假 Ollama，验证模型下载链路
 ```
 
 ## 常见问题
