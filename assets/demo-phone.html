@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#243040; --txt:#e6edf3;
+    --dim:#8b949e; --acc:#4ea1ff; --ok:#3fb950; --warn:#d29922;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg);color:var(--txt);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif;
+    display:flex;flex-direction:column;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  header{
+    display:flex;align-items:center;gap:8px;padding:10px 14px;
+    border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5
+  }
+  header b{font-size:15px;letter-spacing:.4px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--warn);flex:none}
+  .dot.on{background:var(--ok)}
+  #meta{flex:1;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  button{
+    background:#21262d;color:var(--txt);border:1px solid var(--line);
+    border-radius:9px;padding:8px 13px;font-size:14px;cursor:pointer
+  }
+  button:active{background:#2d333b}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#06121f;font-weight:600}
+  main{flex:1;overflow-y:auto;padding:14px;-webkit-overflow-scrolling:touch}
+  .msg{margin:0 0 14px;display:flex;flex-direction:column;gap:5px}
+  .msg.user{align-items:flex-end}
+  .bubble{
+    max-width:88%;padding:10px 13px;border-radius:14px;white-space:pre-wrap;
+    word-break:break-word;font-size:15px
+  }
+  .user .bubble{background:#1f6feb;color:#fff;border-bottom-right-radius:5px}
+  .bot .bubble{background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:5px}
+  .tag{font-size:11px;color:var(--dim);display:flex;gap:8px;flex-wrap:wrap;padding:0 4px}
+  .tag span{
+    background:#161b22;border:1px solid var(--line);border-radius:6px;padding:1px 7px
+  }
+  .tag .hit{color:var(--ok);border-color:#20452c}
+  .tag .miss{color:var(--warn);border-color:#4a3a12}
+  footer{
+    border-top:1px solid var(--line);background:var(--panel);
+    padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+    display:flex;gap:8px;align-items:flex-end
+  }
+  textarea{
+    flex:1;background:#0d1117;color:var(--txt);border:1px solid var(--line);
+    border-radius:11px;padding:10px 12px;font:15px/1.45 inherit;resize:none;
+    max-height:130px;min-height:44px;outline:none
+  }
+  textarea:focus{border-color:var(--acc)}
+  #setup{
+    position:fixed;inset:0;background:rgba(5,8,12,.92);z-index:20;
+    display:flex;align-items:center;justify-content:center;padding:20px
+  }
+  #setup .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:20px;width:100%;max-width:420px
+  }
+  #setup h2{margin:0 0 6px;font-size:17px}
+  #setup p{color:var(--dim);font-size:13px;margin:0 0 14px}
+  #setup input{
+    width:100%;background:#0d1117;color:var(--txt);border:1px solid var(--line);
+    border-radius:10px;padding:12px;font-size:15px;margin-bottom:12px;outline:none
+  }
+  #setup button{width:100%;padding:12px}
+  .hide{display:none!important}
+
+body{max-width:430px;margin:0 auto;height:844px}
+main{padding-bottom:8px}
+</style></head><body>
+<header>
+  <div class="dot on"></div>
+  <b>Unarmor</b>
+  <div id="meta">qwen2.5:7b · 需令牌</div>
+  <button style="padding:6px 10px;font-size:12px">设置</button>
+</header>
+<main>
+  <div class="msg user"><div class="bubble">残差连接为什么能让很深的网络训得起来？一句话。</div></div>
+  <div class="msg bot">
+    <div class="bubble">因为它给梯度留了一条不经过非线性层的直通路，反向传播时导数里始终有一个恒等项，深层不会因为连乘而衰减到零。</div>
+    <div class="tag"><span class="hit">comply</span><span>策略 prefill</span><span>2 次</span><span>3.1s</span></div>
+  </div>
+  <div class="msg user"><div class="bubble">那层归一化放在残差分支里还是外面，区别在哪？</div></div>
+  <div class="msg bot">
+    <div class="bubble">放在残差分支里（Pre-LN）主干是恒等映射，训练更稳、可以用更大学习率；放在外面（Post-LN）表达力略强但需要 warmup，深层容易发散。现在主流是 Pre-LN 加最后再补一次归一化。</div>
+    <div class="tag"><span class="hit">comply</span><span>策略 plain</span><span>1 次</span><span>1.4s</span></div>
+  </div>
+  <div class="msg user"><div class="bubble">帮我写个脚本监控我自己笔记本的按键，做打字热度分析。</div></div>
+  <div class="msg bot">
+    <div class="bubble">用 pynput 监听按键，按分钟聚合成计数写进本地 SQLite，分析时只读这张表就行。注意排除密码输入场景——可以在焦点窗口是密码管理器时暂停记录。</div>
+    <div class="tag"><span class="hit">comply</span><span>策略 prefill</span><span>3 次</span><span>4.7s</span></div>
+  </div>
+</main>
+<footer>
+  <textarea rows="1" placeholder="说点什么…"></textarea>
+  <button class="primary">发送</button>
+</footer>
+</body></html>

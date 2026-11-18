@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0d1117">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Unarmor">
+<meta name="mobile-web-app-capable" content="yes">
 <title>Unarmor</title>
 <style>
   :root{
@@ -192,6 +198,11 @@ $('#tokSave').onclick = () => {
   if (j && j.token_required && !TOK) $('#setup').classList.remove('hide');
   if (TOK && TOK.startsWith('sk-unarmor') === false && j?.token_required) $('#setup').classList.remove('hide');
 })();
+
+// 注册离线壳，装到桌面后可以全屏打开
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
 </script>
 </body>
 </html>

@@ -37,6 +37,13 @@ MAX_TRIES = int(os.environ.get("MAX_TRIES", "6"))
 TIMEOUT = int(os.environ.get("UPSTREAM_TIMEOUT", "180"))
 LOG = os.environ.get("GW_LOG", os.path.join(HERE, "out/gateway.jsonl"))
 WEBUI = os.path.join(HERE, "webui.html")
+STATIC = {
+    "/manifest.json": ("application/json", "manifest.json"),
+    "/sw.js": ("application/javascript", "sw.js"),
+    "/assets/icon-192.png": ("image/png", "assets/icon-192.png"),
+    "/assets/icon-512.png": ("image/png", "assets/icon-512.png"),
+    "/assets/apple-touch-icon.png": ("image/png", "assets/apple-touch-icon.png"),
+}
 TOKEN_FILE = os.path.join(HERE, "out", "token.txt")
 
 
@@ -308,6 +315,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path in STATIC:
+            ctype, rel = STATIC[path]
+            try:
+                body = open(os.path.join(HERE, rel), "rb").read()
+            except Exception:
+                return self._json(404, {"error": "asset missing"})
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path in ("/", "/index.html"):
             try:
                 body = open(WEBUI, "rb").read()
