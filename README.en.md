@@ -72,12 +72,28 @@ Qwen2.5-0.5B-Instruct, 26 harmful technical prompts plus 20 sensitive-but-legiti
 | Layer-wise activation projection, scale 0.25 | 4/26 | 0.15 | 0.05 |
 | **Output-distribution suppression** | **2/26** | **0.08** | **0.00** |
 | Gateway resampling (mock upstream) | 0/18 | 0.00 | — |
+| **DeepSeek-V3 direct** | 12/26 | 0.46 | 0.00 |
+| **DeepSeek-V3 via gateway** | 10/26 | 0.38 | 0.00 |
 
 Findings:
 
 1. **Weight surgery does nothing at this scale.** The refusal direction separates cleanly (Cohen's d = 3.5), but residual connections carry the already-accumulated component straight through; editing only the write path cannot remove it.
 2. **Activation ablation is scale-sensitive.** At 1.0 the model collapses into the most conservative template and refusal goes *up*. 0.25 is the working range.
 3. **Output suppression wins on cost/benefit**, with no added false refusals. The trade-off is forced affirmative openings — a lower refusal rate is not the same as better content.
+
+### On a strongly aligned model, prefill recovers about half
+
+Measured on DeepSeek-V3 with the same 26 probes and the same 8-token window:
+
+| Stage | Complied | Still refused |
+|---|---|---|
+| plain, direct | 45 | 24 |
+| assistant prefill | 12 | 12 |
+| prefill-empty | 2 | 10 |
+
+Prefill does work — it recovered 12 of 24 refusals (50%), but the remaining 10 resisted every variant. Overall 0.46 → 0.38.
+
+The difference from the small model is where the refusal lives: the mock upstream only refuses in the opening, so prefill catches everything; a real aligned model refuses at the content level, and pinning the opening just makes it work around you. **The more thoroughly a model is aligned, the less a transport-layer trick buys you.** That matters more for planning than any single number here.
 
 ## Related work
 
