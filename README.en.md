@@ -79,6 +79,18 @@ Findings:
 2. **Activation ablation is scale-sensitive.** At 1.0 the model collapses into the most conservative template and refusal goes *up*. 0.25 is the working range.
 3. **Output suppression wins on cost/benefit**, with no added false refusals. The trade-off is forced affirmative openings — a lower refusal rate is not the same as better content.
 
+## Related work
+
+The code here is an independent implementation; no repository's source was copied. A few ideas come from public research and are credited:
+
+- **Refusal Direction** (Arditi et al., 2024) — refusal is approximately linear in the residual stream; the Cohen's d check in `diag_dirs.py` and the direction extraction follow this.
+- **Abliteration** community practice (e.g. `p-e-w/heretic`) — orthogonalizing `o_proj` / `down_proj`.
+- **Safety Alignment is Shallow** (Qi et al., 2023) — evidence that small amounts of fine-tuning erode alignment.
+
+Positioning: those projects are pure weight surgery; this one is primarily a **cross-device gateway**, with the weight/activation work shipped as a set of verification results.
+
+Scope: the probe set exists to evaluate alignment robustness and contains no directly executable harmful code; model outputs are not committed.
+
 ## Configuration
 
 | Variable | Default | Meaning |
