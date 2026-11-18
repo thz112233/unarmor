@@ -143,6 +143,46 @@ def list_models(base, key=""):
     return out
 
 
+PROVIDERS_FILE = os.path.join(HERE, "out", "providers.json")
+
+# 环境变量来的上游固定不动，文件里的是可增删的云端 provider
+ENV_UPSTREAMS = list(UPSTREAMS)
+
+
+def load_providers():
+    try:
+        if os.path.exists(PROVIDERS_FILE):
+            return json.load(open(PROVIDERS_FILE))
+    except Exception:
+        pass
+    return []
+
+
+def save_providers(rows):
+    os.makedirs(os.path.dirname(PROVIDERS_FILE), exist_ok=True)
+    tmp = PROVIDERS_FILE + ".tmp"
+    json.dump(rows, open(tmp, "w"), ensure_ascii=False, indent=1)
+    os.replace(tmp, PROVIDERS_FILE)
+
+
+def rebuild_upstreams():
+    global UPSTREAMS
+    rows = load_providers()
+    got = ENV_UPSTREAMS + [
+        {"base": r["base"], "key": r.get("key", ""), "model": r.get("model", ""),
+         "label": r.get("name") or r.get("model") or r["base"]}
+        for r in rows if r.get("base")
+    ]
+    UPSTREAMS[:] = got
+    return got
+
+
+def mask(k):
+    if not k:
+        return ""
+    return k[:6] + "…" + k[-4:] if len(k) > 12 else "…"
+
+
 # ---------------------------------------------------------------- 策略层
 STRATEGIES = [
     {"name": "plain",         "prefill": None,  "temp": 0.7},
@@ -379,6 +419,16 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if path == "/api/providers":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            rows = load_providers()
+            return self._json(200, {
+                "env": [{"base": u["base"], "model": u["model"]} for u in ENV_UPSTREAMS],
+                "cloud": [{"id": r.get("id"), "name": r.get("name"),
+                           "base": r["base"], "model": r.get("model"),
+                           "key": mask(r.get("key", ""))} for r in rows],
+            })
         if path == "/api/models":
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
@@ -402,6 +452,50 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"object": "list", "data": [
                 {"id": u["model"] or "auto", "object": "model"} for u in UPSTREAMS]})
         self._json(404, {"error": "not found"})
+
+    def _handle_provider(self, path):
+        """云端模型：加一个 OpenAI 兼容端点，或删掉一个。"""
+        if not self._auth_ok():
+            return self._json(401, {"error": "unauthorized"})
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            body = {}
+        rows = load_providers()
+
+        if path.endswith("/delete"):
+            pid = body.get("id")
+            rows = [r for r in rows if r.get("id") != pid]
+            save_providers(rows)
+            rebuild_upstreams()
+            return self._json(200, {"ok": True, "removed": pid})
+
+        base = (body.get("base") or "").strip().rstrip("/")
+        model = (body.get("model") or "").strip()
+        key = (body.get("key") or "").strip()
+        name = (body.get("name") or model or base).strip()
+        if not base or not model:
+            return self._json(400, {"error": "base 和 model 都要填"})
+        if not base.endswith("/v1") and "/v1/" not in base:
+            base += "/v1"
+
+        # 先探一下通不通，别把错的存进去
+        probe = {"base": base, "key": key, "model": model, "label": name}
+        resp, err = call_upstream(probe, {"model": model, "max_tokens": 1,
+                                          "messages": [{"role": "user", "content": "hi"}]})
+        # 连不上、超时、4xx 都判定为配置错误，不存进去；5xx 可能是服务端临时问题，放行
+        if err and any(k in err for k in ("URLError", "Connection", "timed out",
+                                          "TimeoutError", "HTTP 4")):
+            return self._json(400, {"error": "端点不可用：" + err[:200]})
+
+        pid = body.get("id") or ("p" + str(int(time.time() * 1000))[-9:])
+        rows = [r for r in rows if r.get("id") != pid]
+        rows.append({"id": pid, "name": name, "base": base, "key": key, "model": model})
+        save_providers(rows)
+        got = rebuild_upstreams()
+        return self._json(200, {"ok": True, "id": pid, "upstreams": len(got),
+                                "warn": err[:160] if err else None})
 
     def _handle_pull(self):
         """把 Ollama 的 /api/pull 原样转出去，边下边把进度回给前端。"""
@@ -443,6 +537,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path in ("/api/providers", "/api/providers/delete"):
+            return self._handle_provider(path)
         if path == "/api/pull":
             return self._handle_pull()
         if not path.rstrip("/").endswith("/chat/completions"):
@@ -493,6 +589,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    rebuild_upstreams()
     banner()
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     try:

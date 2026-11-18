@@ -92,6 +92,26 @@
   .mitem:last-child{border-bottom:0}
   .dim{color:var(--dim)}
   #pullLog{margin-top:10px;font-size:12px;color:var(--acc);min-height:16px;word-break:break-all}
+  #capsules{display:flex;gap:8px;overflow-x:auto;padding:8px 12px 2px;background:var(--panel);
+    border-top:1px solid var(--line);scrollbar-width:none}
+  #capsules::-webkit-scrollbar{display:none}
+  #capsules:empty{display:none}
+  .capsule{flex:none;background:#21262d;border:1px solid var(--line);color:var(--txt);
+    border-radius:999px;padding:6px 12px;font-size:13px;white-space:nowrap;cursor:pointer}
+  .capsule:active{background:#2d3a4a}
+  #store{position:fixed;inset:0;background:rgba(5,8,12,.94);z-index:30;display:flex;
+    align-items:center;justify-content:center;padding:16px}
+  #store .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:18px;width:100%;max-width:460px;max-height:82vh;overflow-y:auto}
+  #store h2{margin:0 0 4px;font-size:17px}
+  #store .sub{margin:0 0 14px;font-size:12px;color:var(--dim)}
+  .pitem{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;
+    display:flex;justify-content:space-between;gap:10px;align-items:center}
+  .pitem h4{margin:0 0 3px;font-size:14px}
+  .pitem p{margin:0;font-size:12px;color:var(--dim)}
+  .pitem button{padding:7px 12px;font-size:13px;flex:none}
+  .pitem button.on{background:#20452c;border-color:#2d6a3f;color:#3fb950}
+  #provList .mitem span:last-child{color:var(--warn);cursor:pointer}
 </style>
 </head>
 <body>
@@ -104,6 +124,7 @@
 
 <main id="log"></main>
 
+<div id="capsules"></div>
 <footer>
   <textarea id="inp" rows="1" placeholder="说点什么…"></textarea>
   <button class="primary" id="send">发送</button>
@@ -124,6 +145,30 @@
       <button class="primary" id="pullBtn">下载</button>
     </div>
     <div id="pullLog"></div>
+
+    <hr>
+    <h3>云端模型</h3>
+    <div id="provList"><span class="dim">还没有添加</span></div>
+    <input id="provName" placeholder="名称，如 DeepSeek" autocomplete="off">
+    <input id="provBase" placeholder="接口地址，如 https://api.deepseek.com/v1" autocomplete="off">
+    <input id="provModel" placeholder="模型名，如 deepseek-chat" autocomplete="off">
+    <input id="provKey" placeholder="API Key" type="password" autocomplete="off">
+    <button class="primary" id="provAdd">添加到网关</button>
+    <div id="provLog"></div>
+
+    <hr>
+    <h3>插件</h3>
+    <div id="pluginInstalled"><span class="dim">还没有安装</span></div>
+    <button id="storeBtn" style="width:100%;margin-top:10px">打开插件广场</button>
+  </div>
+</div>
+
+<div id="store" class="hide">
+  <div class="card">
+    <h2>插件广场</h2>
+    <p class="sub">装上之后会出现在输入框上方，点一下就填进输入框</p>
+    <div id="storeList"></div>
+    <button class="primary" id="storeClose" style="width:100%;margin-top:6px">关闭</button>
   </div>
 </div>
 
@@ -269,7 +314,8 @@ $('#pullBtn').onclick = doPull;
 $('#btnSetup').onclick = () => {
   $('#tokInp').value = TOK;
   $('#setup').classList.remove('hide');
-  if (TOK) loadModels();
+  if (TOK){ loadModels(); loadProviders(); }
+  renderPlugins();
 };
 $('#tokSave').onclick = () => {
   TOK = $('#tokInp').value.trim();
@@ -283,6 +329,126 @@ $('#tokSave').onclick = () => {
   if (j && j.token_required && !TOK) $('#setup').classList.remove('hide');
   if (TOK && TOK.startsWith('sk-unarmor') === false && j?.token_required) $('#setup').classList.remove('hide');
 })();
+
+// ---------------------------------------------------------------- 云端模型
+async function loadProviders(){
+  const box = $('#provList');
+  try{
+    const r = await fetch('/api/providers', {headers:{'Authorization':'Bearer ' + TOK}});
+    if (r.status === 401){ box.innerHTML = '<span class="dim">先填令牌</span>'; return; }
+    const j = await r.json();
+    const rows = j.cloud || [];
+    if (!rows.length){ box.innerHTML = '<span class="dim">还没有添加</span>'; return; }
+    box.innerHTML = rows.map(pid =>
+      `<div class="mitem"><span>${pid.name} · ${pid.model}</span>` +
+      `<span data-del="${pid.id}">删除</span></div>`).join('');
+    box.querySelectorAll('[data-del]').forEach(el => {
+      el.onclick = async () => {
+        await fetch('/api/providers/delete', {
+          method:'POST',
+          headers:{'Content-Type':'application/json','Authorization':'Bearer ' + TOK},
+          body: JSON.stringify({id: el.dataset.del})
+        });
+        loadProviders(); info();
+      };
+    });
+  }catch(e){ box.textContent = '读取失败：' + e.message; }
+}
+
+async function addProvider(){
+  const name = $('#provName').value.trim();
+  const base = $('#provBase').value.trim();
+  const model = $('#provModel').value.trim();
+  const key = $('#provKey').value.trim();
+  const out = $('#provLog');
+  if (!base || !model){ out.textContent = '接口地址和模型名必填'; return; }
+  if (!TOK){ out.textContent = '先在上面填接入令牌'; return; }
+  out.textContent = '正在验证端点…';
+  try{
+    const r = await fetch('/api/providers', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer ' + TOK},
+      body: JSON.stringify({name, base, model, key})
+    });
+    const j = await r.json();
+    if (!r.ok){ out.textContent = '失败：' + (j.error || '').slice(0,140); return; }
+    out.textContent = '已添加，现在可以切过去用';
+    $('#provKey').value = '';
+    loadProviders(); info();
+  }catch(e){ out.textContent = '失败：' + e.message; }
+}
+
+$('#provAdd').onclick = addProvider;
+
+// ---------------------------------------------------------------- 插件
+const STORE = [
+  {id:'summarize', name:'总结',      desc:'把最近的内容压成三句话',        prompt:'用三句话总结上面的内容'},
+  {id:'translate', name:'译成英文',  desc:'把上一条回复翻成英文',          prompt:'把上一条回复翻译成英文，只输出译文'},
+  {id:'explain',   name:'解释代码',  desc:'逐行解释代码在做什么',          prompt:'逐行解释上面的代码在做什么'},
+  {id:'steps',     name:'拆步骤',    desc:'把方案拆成可执行步骤',          prompt:'把上面的方案拆成编号步骤，每步一句话'},
+  {id:'review',    name:'挑毛病',    desc:'指出问题并按严重度排序',        prompt:'指出上面内容里的问题，按严重程度排序'},
+  {id:'compare',   name:'做对比',    desc:'把选项列成对比表',              prompt:'把上面的选项做成对比表，列出关键差异'},
+  {id:'tldr',      name:'一句话',    desc:'压成一句',                      prompt:'用一句话概括'},
+];
+
+const PKEY = 'unarmor_plugins';
+function installed(){
+  try{
+    const v = JSON.parse(localStorage.getItem(PKEY));
+    if (Array.isArray(v)) return v;
+  }catch(e){}
+  return ['summarize','translate','explain'];
+}
+function saveInstalled(ids){ localStorage.setItem(PKEY, JSON.stringify(ids)); renderCapsules(); }
+
+function renderCapsules(){
+  const bar = $('#capsules'), ids = installed();
+  const rows = STORE.filter(p => ids.includes(p.id));
+  bar.innerHTML = rows.map(p =>
+    `<button class="capsule" data-p="${p.id}">${p.name}</button>`).join('');
+  bar.querySelectorAll('[data-p]').forEach(el => {
+    el.onclick = () => {
+      const p = STORE.find(x => x.id === el.dataset.p);
+      if (!p) return;
+      inp.value = p.prompt;
+      inp.focus();
+      inp.dispatchEvent(new Event('input'));
+    };
+  });
+}
+
+function renderPlugins(){
+  const box = $('#pluginInstalled'), ids = installed();
+  const rows = STORE.filter(p => ids.includes(p.id));
+  box.innerHTML = rows.length
+    ? rows.map(p => `<div class="mitem"><span>${p.name}</span><span class="dim">${p.desc}</span></div>`).join('')
+    : '<span class="dim">还没有安装</span>';
+}
+
+function renderStore(){
+  const box = $('#storeList'), ids = installed();
+  box.innerHTML = STORE.map(p => {
+    const on = ids.includes(p.id);
+    return `<div class="pitem"><div><h4>${p.name}</h4><p>${p.desc}</p></div>` +
+           `<button data-t="${p.id}" class="${on ? 'on' : ''}">${on ? '已装' : '安装'}</button></div>`;
+  }).join('');
+  box.querySelectorAll('[data-t]').forEach(el => {
+    el.onclick = () => {
+      const id = el.dataset.t;
+      let cur = installed();
+      cur = cur.includes(id) ? cur.filter(x => x !== id) : cur.concat(id);
+      saveInstalled(cur);
+      renderStore(); renderPlugins();
+    };
+  });
+}
+
+$('#storeBtn').onclick = () => { renderStore(); $('#store').classList.remove('hide'); };
+$('#storeClose').onclick = () => $('#store').classList.add('hide');
+
+// 首次渲染
+renderCapsules();
+renderPlugins();
 
 // 注册离线壳，装到桌面后可以全屏打开
 if ('serviceWorker' in navigator) {

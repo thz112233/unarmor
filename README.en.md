@@ -136,6 +136,20 @@ No terminal needed. Open the gateway in a phone browser → top-right "设置" �
 
 This proxies Ollama's `/api/pull`, so **the upstream must be Ollama**. LM Studio or vLLM can list models but cannot pull new ones.
 
+### Cloud models
+
+Four fields in the settings panel: name, base URL, model, API key.
+
+The gateway probes the endpoint before saving — connection failures and 4xx are rejected, so a broken config never lands on disk. Once saved it takes effect immediately and joins the upstream rotation alongside local models.
+
+Keys live in `out/providers.json` on the desktop. The list endpoint only returns a masked form (`sk-tes…6789`); the raw value never reaches the browser.
+
+### Plugins
+
+The pills above the input box are plugins. Seven built in: summarize, translate to English, explain code, break into steps, find issues, compare options, one-liner.
+
+The plugin store lets you install and remove them; state is kept in browser local storage. Tapping a pill fills the preset instruction into the input box — it does not auto-send.
+
 ### Two knobs to adjust with bigger models
 
 Every retry is a full generation. Irrelevant at 0.5B, painful at 7B+:
