@@ -37,7 +37,7 @@ d = ImageDraw.Draw(img)
 d.rectangle([0, 0, px(W), px(56)], fill=PANEL)
 d.line([0, px(56), px(W), px(56)], fill=LINE, width=px(1))
 d.ellipse([px(16), px(24), px(24), px(32)], fill=OK)
-d.text((px(32), px(18)), "Unarmor", font=f(15, True), fill=TXT)
+d.text((px(32), px(18)), "小汐鲸", font=f(15, True), fill=TXT)
 d.text((px(112), px(20)), "qwen2.5:7b · 需令牌", font=f(11), fill=DIM)
 bw = px(46)
 d.rounded_rectangle([px(W) - px(14) - bw, px(15), px(W) - px(14), px(41)],

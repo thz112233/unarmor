@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="assets/icon-192.png" width="88" alt="Unarmor">
+<img src="assets/icon-192.png" width="88" alt="小汐鲸">
 
-# Unarmor
+# 小汐鲸
 
 **Run the model on your computer. Use it from your phone.**
 
@@ -23,7 +23,7 @@ Your model runs on a desktop; you are on a phone. What is missing is never "an A
 - re-configuring `base_url` and keys for every client
 - what to do when the model refuses, beyond rephrasing
 
-Unarmor puts all of it in one process: **run one Python file on the desktop, scan a QR code on the phone, install it to the home screen like a native app.**
+小汐鲸 puts all of it in one process: **run one Python file on the desktop, scan a QR code on the phone, install it to the home screen like a native app.**
 
 ## Quick start
 
@@ -146,9 +146,11 @@ Keys live in `out/providers.json` on the desktop. The list endpoint only returns
 
 ### Plugins
 
-The pills above the input box are plugins. Seven built in: summarize, translate to English, explain code, break into steps, find issues, compare options, one-liner.
+85 plugins built in, nine categories: channel, enhancement, code, writing, analysis, translation, learning, life, skill.
 
-The plugin store lets you install and remove them; state is kept in browser local storage. Tapping a pill fills the preset instruction into the input box — it does not auto-send.
+Pipeline plugins (channel / enhancement) stay active once enabled and touch every request. Prompt plugins fill their instruction into the input box for one turn only.
+
+The market also accepts an external registry: paste a `registry.json` URL and its entries join the list.
 
 ### Two knobs to adjust with bigger models
 
@@ -196,7 +198,8 @@ Extra upstreams: `UPSTREAM_BASE_2`, `UPSTREAM_MODEL_2`, `UPSTREAM_KEY_2`, rotate
 
 ```
 unarmor/
-├── gateway.py              gateway: connection + strategy + model/provider management (stdlib only)
+├── gateway.py              gateway: connection + strategy + plugin engine + providers (stdlib only)
+├── catalog.py              68 prompt plugins in seven categories
 ├── webui.html              shared UI: chat / settings / plugin store
 ├── manifest.json, sw.js    PWA: installs to the home screen
 ├── 启动-电脑.bat/.command    one-click start
