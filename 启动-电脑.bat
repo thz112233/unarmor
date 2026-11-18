@@ -6,6 +6,7 @@ REM ================= 改这里 =================
 REM 上游：电脑上已经跑着的模型服务。Ollama 默认就是下面这行。
 set "UPSTREAM_BASE=http://127.0.0.1:11434/v1"
 set "UPSTREAM_MODEL=qwen2.5:7b"
+REM 16G 内存可选：qwen2.5:7b（推荐）/ qwen2.5:14b（上限，慢）
 REM 云端 API 示例（把 UPSTREAM_BASE 换成对应地址，KEY 填进去）：
 REM set "UPSTREAM_BASE=https://api.deepseek.com/v1"
 REM set "UPSTREAM_MODEL=deepseek-chat"

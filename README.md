@@ -86,7 +86,9 @@ Termux 里 `pkg install python`，然后跑同一个 `gateway.py`，上游填云
 
 ## 实测数据
 
-被测模型 Qwen2.5-0.5B-Instruct（24 层），探针 26 条有害技术请求 + 20 条含敏感词的正当请求。判定只看开头 8 个 token —— 拒答是短语级行为。
+被测模型 **Qwen2.5-0.5B-Instruct**（24 层，手机 CPU 运行）。其他尺寸的数字不通用，换模型请重测，方法见下面的「选哪个模型」。
+
+探针 26 条有害技术请求 + 20 条含敏感词的正当请求。判定只看开头 8 个 token —— 拒答是短语级行为。
 
 | 干预 | 拒答 | 拒答率 | 正当请求误拒 |
 |---|---|---|---|
@@ -114,6 +116,65 @@ Termux 里 `pkg install python`，然后跑同一个 `gateway.py`，上游填云
 定位差异：上面这些项目做的是纯权重手术，本项目的主体是**跨设备网关**，权重/激活实验只是仓库里的一组验证数据。
 
 用途边界：实验部分的探针集用于评估对齐鲁棒性，不含可直接执行的危害代码；仓库里也没有放模型的原始输出。如果你的使用场景是生产环境，破甲那部分本来也不该开。
+
+## 选哪个模型
+
+推理跑在电脑上，手机只是客户端，所以选型只看**电脑物理内存**，不看手机。
+
+| 模型 | 量化 | 内存 | CPU 速度（8 核） | 判断 |
+|---|---|---|---|---|
+| Qwen2.5-7B-Instruct | Q4_K_M | ~4.7G | 5–10 tok/s | **16G 内存首选** |
+| Qwen2.5-8B-Instruct | Q4_K_M | ~5.2G | 4–8 tok/s | 可选 |
+| Qwen2.5-14B-Instruct | Q4_K_M | ~9.2G | 2–4 tok/s | 16G 的上限，8K 上下文会很紧 |
+| Qwen2.5-32B | Q4 | ~19G | — | 超过 16G 物理内存，别碰 |
+
+上下文也吃内存：7B 开 8K 约多占 1G，14B 约 2G。swap 只当保险，别当容量——模型一旦被换出去，速度会塌到 1 tok/s 以下，那不是"慢一点"，是没法用。
+
+```bash
+# 电脑上
+ollama pull qwen2.5:7b
+
+# 指向它（启动脚本开头那几行改这里）
+UPSTREAM_BASE=http://127.0.0.1:11434/v1 \
+UPSTREAM_MODEL=qwen2.5:7b \
+python gateway.py
+```
+
+有独立显卡就完全不同：12G 显存能把 14B Q4 整块装进去，速度是 CPU 的十倍以上。`nvidia-smi` 看一眼就知道。
+
+### 大模型的两个参数要跟着调
+
+策略链是"拒答就重试"，每次重试都是一次完整生成。0.5B 上无所谓，7B 以上会很难受：
+
+| 变量 | 小模型 | 7B | 14B |
+|---|---|---|---|
+| `MAX_TRIES` | 6 | 3 | 2 |
+| `UPSTREAM_TIMEOUT` | 180 | 300 | 600 |
+
+```bash
+MAX_TRIES=3 UPSTREAM_TIMEOUT=300 UPSTREAM_MODEL=qwen2.5:7b python gateway.py
+```
+
+按 6 次重试算，14B 上一个被拒的问题要等十二分钟才给你最终答案，中间没有任何进度——这不是策略在起作用，是它在拖时间。
+
+### 换模型后必做的两件事
+
+1. **拒答率会上升，不是下降。** 小模型记不住多少对齐数据（0.5B 实测 0.31），7B 以上普遍在 0.6–0.9。策略层在这个尺寸上更用得上，不是更用不上。
+2. **要重测。** 上面那张表是 0.5B 的结果，不能代表 7B。
+
+重测只需要换 `--model`：
+
+```bash
+# 基线
+python3 probe_short.py --model /path/to/qwen2.5-7b --tag baseline7b
+# 方向提取 + 手术
+python3 abliterate.py extract --model /path/to/qwen2.5-7b --out out/dirs7b.npz
+python3 abliterate.py patch   --model /path/to/qwen2.5-7b \
+                              --dirs out/dirs7b.npz --out /path/to/qwen2.5-7b-abl
+python3 probe_short.py --model /path/to/qwen2.5-7b-abl --tag ablated7b
+```
+
+7B 的拒答方向通常比 0.5B 更集中，权重手术在这一档更容易出效果——社区里的 abliteration 实践基本都在 7B–8B。不过这是经验判断，数字以你实测为准。
 
 ## 安装
 

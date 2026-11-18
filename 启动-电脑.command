@@ -5,6 +5,8 @@ cd "$(dirname "$0")"
 # 上游：电脑上已经跑着的模型服务。Ollama 默认就是下面这行。
 export UPSTREAM_BASE="http://127.0.0.1:11434/v1"
 export UPSTREAM_MODEL="qwen2.5:7b"
+# 16G 内存可选：qwen2.5:7b（推荐）/ qwen2.5:14b（上限，慢）
+# 有 12G 以上显存可以试 qwen2.5:14b，速度会快很多
 # 云端 API 示例：
 # export UPSTREAM_BASE="https://api.deepseek.com/v1"
 # export UPSTREAM_MODEL="deepseek-chat"

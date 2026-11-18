@@ -91,6 +91,54 @@ Positioning: those projects are pure weight surgery; this one is primarily a **c
 
 Scope: the probe set exists to evaluate alignment robustness and contains no directly executable harmful code; model outputs are not committed.
 
+## Which model
+
+Inference runs on the desktop; the phone is only a client. Sizing depends on **desktop RAM**, not the phone.
+
+| Model | Quant | RAM | CPU speed (8 cores) | Verdict |
+|---|---|---|---|---|
+| Qwen2.5-7B-Instruct | Q4_K_M | ~4.7G | 5–10 tok/s | **best fit for 16G** |
+| Qwen2.5-8B-Instruct | Q4_K_M | ~5.2G | 4–8 tok/s | optional |
+| Qwen2.5-14B-Instruct | Q4_K_M | ~9.2G | 2–4 tok/s | ceiling for 16G |
+| Qwen2.5-32B | Q4 | ~19G | — | exceeds 16G physical RAM |
+
+Context costs RAM too: 8K adds ~1G for 7B, ~2G for 14B. Treat swap as a safety net, not capacity — once the model is swapped out you drop below 1 tok/s.
+
+```bash
+ollama pull qwen2.5:7b
+UPSTREAM_BASE=http://127.0.0.1:11434/v1 UPSTREAM_MODEL=qwen2.5:7b python gateway.py
+```
+
+With a discrete GPU (12G VRAM) a 14B Q4 fits entirely in VRAM and runs an order of magnitude faster.
+
+### Two knobs to adjust with bigger models
+
+Every retry is a full generation. Irrelevant at 0.5B, painful at 7B+:
+
+| Variable | small | 7B | 14B |
+|---|---|---|---|
+| `MAX_TRIES` | 6 | 3 | 2 |
+| `UPSTREAM_TIMEOUT` | 180 | 300 | 600 |
+
+```bash
+MAX_TRIES=3 UPSTREAM_TIMEOUT=300 UPSTREAM_MODEL=qwen2.5:7b python gateway.py
+```
+
+At 6 retries on 14B, a refused question takes twelve minutes to give you a final answer with no progress shown. That is not the strategy working; that is it wasting your time.
+
+### After switching models
+
+1. **Refusals go up, not down.** Small models barely absorb alignment data (0.5B measured 0.31); 7B and up typically sit at 0.6–0.9. The strategy layer matters more at that size, not less.
+2. **Re-measure.** The table above is 0.5B only.
+
+```bash
+python3 probe_short.py --model /path/to/qwen2.5-7b --tag baseline7b
+python3 abliterate.py extract --model /path/to/qwen2.5-7b --out out/dirs7b.npz
+python3 abliterate.py patch   --model /path/to/qwen2.5-7b --dirs out/dirs7b.npz --out /path/to/abl
+```
+
+The refusal direction in 7B is usually more concentrated than in 0.5B, so weight surgery is more likely to land at that scale.
+
 ## Configuration
 
 | Variable | Default | Meaning |
