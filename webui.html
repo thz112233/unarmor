@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>Unarmor</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#243040; --txt:#e6edf3;
+    --dim:#8b949e; --acc:#4ea1ff; --ok:#3fb950; --warn:#d29922;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg);color:var(--txt);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif;
+    display:flex;flex-direction:column;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  header{
+    display:flex;align-items:center;gap:8px;padding:10px 14px;
+    border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5
+  }
+  header b{font-size:15px;letter-spacing:.4px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--warn);flex:none}
+  .dot.on{background:var(--ok)}
+  #meta{flex:1;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  button{
+    background:#21262d;color:var(--txt);border:1px solid var(--line);
+    border-radius:9px;padding:8px 13px;font-size:14px;cursor:pointer
+  }
+  button:active{background:#2d333b}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#06121f;font-weight:600}
+  main{flex:1;overflow-y:auto;padding:14px;-webkit-overflow-scrolling:touch}
+  .msg{margin:0 0 14px;display:flex;flex-direction:column;gap:5px}
+  .msg.user{align-items:flex-end}
+  .bubble{
+    max-width:88%;padding:10px 13px;border-radius:14px;white-space:pre-wrap;
+    word-break:break-word;font-size:15px
+  }
+  .user .bubble{background:#1f6feb;color:#fff;border-bottom-right-radius:5px}
+  .bot .bubble{background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:5px}
+  .tag{font-size:11px;color:var(--dim);display:flex;gap:8px;flex-wrap:wrap;padding:0 4px}
+  .tag span{
+    background:#161b22;border:1px solid var(--line);border-radius:6px;padding:1px 7px
+  }
+  .tag .hit{color:var(--ok);border-color:#20452c}
+  .tag .miss{color:var(--warn);border-color:#4a3a12}
+  footer{
+    border-top:1px solid var(--line);background:var(--panel);
+    padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+    display:flex;gap:8px;align-items:flex-end
+  }
+  textarea{
+    flex:1;background:#0d1117;color:var(--txt);border:1px solid var(--line);
+    border-radius:11px;padding:10px 12px;font:15px/1.45 inherit;resize:none;
+    max-height:130px;min-height:44px;outline:none
+  }
+  textarea:focus{border-color:var(--acc)}
+  #setup{
+    position:fixed;inset:0;background:rgba(5,8,12,.92);z-index:20;
+    display:flex;align-items:center;justify-content:center;padding:20px
+  }
+  #setup .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:20px;width:100%;max-width:420px
+  }
+  #setup h2{margin:0 0 6px;font-size:17px}
+  #setup p{color:var(--dim);font-size:13px;margin:0 0 14px}
+  #setup input{
+    width:100%;background:#0d1117;color:var(--txt);border:1px solid var(--line);
+    border-radius:10px;padding:12px;font-size:15px;margin-bottom:12px;outline:none
+  }
+  #setup button{width:100%;padding:12px}
+  .hide{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <div class="dot" id="dot"></div>
+  <b>Unarmor</b>
+  <div id="meta">连接中…</div>
+  <button id="btnSetup" style="padding:6px 10px;font-size:12px">设置</button>
+</header>
+
+<main id="log"></main>
+
+<footer>
+  <textarea id="inp" rows="1" placeholder="说点什么…"></textarea>
+  <button class="primary" id="send">发送</button>
+</footer>
+
+<div id="setup" class="hide">
+  <div class="card">
+    <h2>连接到电脑</h2>
+    <p id="setupHint">填入电脑上启动时打印的接入令牌。地址已经是当前这台服务器。</p>
+    <input id="tokInp" placeholder="令牌 (sk-unarmor-…)" autocomplete="off">
+    <button class="primary" id="tokSave">连接</button>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const logEl = $('#log'), inp = $('#inp'), dot = $('#dot'), meta = $('#meta');
+
+function token(){
+  const u = new URLSearchParams(location.search).get('token');
+  if (u) { localStorage.setItem('unarmor_tok', u); return u; }
+  return localStorage.getItem('unarmor_tok') || '';
+}
+let TOK = token();
+
+function addMsg(role, text){
+  const d = document.createElement('div');
+  d.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
+  const b = document.createElement('div');
+  b.className = 'bubble'; b.textContent = text;
+  d.appendChild(b);
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+  return d;
+}
+function addTag(node, gw){
+  if (!gw) return;
+  const t = document.createElement('div');
+  t.className = 'tag';
+  const ok = gw.verdict === 'comply' || gw.verdict === 'hedge_comply';
+  t.innerHTML = `<span class="${ok?'hit':'miss'}">${gw.verdict}</span>`
+    + `<span>策略 ${gw.strategy}</span><span>${gw.tries} 次</span>`
+    + `<span>${gw.elapsed}s</span>`;
+  node.appendChild(t);
+}
+
+async function info(){
+  try{
+    const r = await fetch('/api/info');
+    const j = await r.json();
+    dot.classList.add('on');
+    meta.textContent = `${j.model || '未知模型'} · ${j.token_required ? '需令牌' : '开放'}`;
+    return j;
+  }catch(e){
+    dot.classList.remove('on');
+    meta.textContent = '未连接';
+  }
+}
+
+async function send(){
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = ''; inp.style.height = 'auto';
+  addMsg('user', text);
+  const node = addMsg('bot', '…');
+  const bubble = node.querySelector('.bubble');
+  const t0 = Date.now();
+  try{
+    const r = await fetch('/v1/chat/completions', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer ' + TOK},
+      body: JSON.stringify({model:'auto', messages:[{role:'user', content:text}]})
+    });
+    const j = await r.json();
+    if (!r.ok){
+      bubble.textContent = '错误 ' + r.status + '：' + (j.error || JSON.stringify(j));
+      return;
+    }
+    bubble.textContent = j.choices?.[0]?.message?.content || '(空)';
+    addTag(node, j.x_gateway ? {...j.x_gateway, elapsed: ((Date.now()-t0)/1000).toFixed(1)} : null);
+    logEl.scrollTop = logEl.scrollHeight;
+  }catch(e){
+    bubble.textContent = '连接失败：' + e.message + '\n检查手机与电脑是否在同一 WiFi。';
+  }
+}
+
+$('#send').onclick = send;
+inp.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing){ e.preventDefault(); send(); }
+});
+inp.addEventListener('input', () => {
+  inp.style.height = 'auto'; inp.style.height = Math.min(inp.scrollHeight, 130) + 'px';
+});
+$('#btnSetup').onclick = () => { $('#tokInp').value = TOK; $('#setup').classList.remove('hide'); };
+$('#tokSave').onclick = () => {
+  TOK = $('#tokInp').value.trim();
+  localStorage.setItem('unarmor_tok', TOK);
+  $('#setup').classList.add('hide');
+  info();
+};
+
+(async () => {
+  const j = await info();
+  if (j && j.token_required && !TOK) $('#setup').classList.remove('hide');
+  if (TOK && TOK.startsWith('sk-unarmor') === false && j?.token_required) $('#setup').classList.remove('hide');
+})();
+</script>
+</body>
+</html>

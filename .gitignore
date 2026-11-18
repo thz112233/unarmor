@@ -1,0 +1,9 @@
+# 模型权重（1.9G，不进仓库）
+models/
+# Python
+__pycache__/
+*.py[cod]
+# 运行产物：含令牌、请求日志与模型原始输出
+out/
+# 系统
+.DS_Store
