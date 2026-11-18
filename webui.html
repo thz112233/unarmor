@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0d1117">
+<meta name="build" content="1118-1237">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -80,6 +81,34 @@
   }
   #setup button{width:100%;padding:12px}
   .hide{display:none!important}
+  /* 抽屉 */
+  #drawer{position:fixed;inset:0;z-index:40}
+  #drawer .scrim{position:absolute;inset:0;background:rgba(0,0,0,.55);
+    animation:fadein .16s ease}
+  #drawer aside{
+    position:absolute;top:0;bottom:0;left:0;width:78%;max-width:310px;
+    background:var(--panel);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;padding:14px;
+    animation:slidein .2s cubic-bezier(.2,.8,.3,1);
+    box-shadow:6px 0 24px rgba(0,0,0,.5)
+  }
+  @keyframes slidein{from{transform:translateX(-100%)}to{transform:none}}
+  @keyframes fadein{from{opacity:0}to{opacity:1}}
+  #drawer .dhead{display:flex;align-items:center;gap:10px;padding:6px 6px 16px;
+    border-bottom:1px solid var(--line);margin-bottom:10px}
+  #drawer .dhead img{width:34px;height:34px;border-radius:9px}
+  #drawer .dhead b{font-size:15px}
+  #drawer .dhead span{font-size:11px;color:var(--dim);display:block}
+  #drawer nav button{
+    display:flex;align-items:center;gap:11px;width:100%;text-align:left;
+    background:transparent;border:0;color:var(--txt);padding:12px 10px;
+    border-radius:10px;font-size:15px;cursor:pointer
+  }
+  #drawer nav button:active{background:#21262d}
+  #drawer nav .ico{width:22px;text-align:center;font-size:16px;flex:none}
+  #drawer .dfoot{margin-top:auto;font-size:11px;color:var(--dim);
+    padding:12px 6px 4px;border-top:1px solid var(--line);line-height:1.7}
+  #btnMenu{padding:6px 10px;font-size:17px;line-height:1}
   #setup .card{max-height:86vh;overflow-y:auto}
   #setup hr{border:0;border-top:1px solid var(--line);margin:18px 0}
   #setup h3{font-size:14px;margin:0 0 10px;color:var(--txt)}
@@ -128,10 +157,10 @@
 </head>
 <body>
 <header>
+  <button id="btnMenu" aria-label="菜单">☰</button>
   <div class="dot" id="dot"></div>
   <b>小汐鲸</b>
   <div id="meta">连接中…</div>
-  <button id="btnSetup" style="padding:6px 10px;font-size:12px">设置</button>
 </header>
 
 <main id="log"></main>
@@ -174,6 +203,23 @@
   </div>
 </div>
 
+<div id="drawer" class="hide">
+  <div class="scrim" id="drawerScrim"></div>
+  <aside>
+    <div class="dhead">
+      <img src="assets/icon-192.png" alt="">
+      <div><b>小汐鲸</b><span id="dModel">未连接</span></div>
+    </div>
+    <nav>
+      <button data-act="new"><span class="ico">✦</span>新对话</button>
+      <button data-act="plugins"><span class="ico">⧉</span>插件市场</button>
+      <button data-act="setup"><span class="ico">⚙</span>设置</button>
+      <button data-act="reload"><span class="ico">↻</span>刷新页面</button>
+    </nav>
+    <div class="dfoot" id="dInfo">读取中…</div>
+  </aside>
+</div>
+
 <div id="store" class="hide">
   <div class="card">
     <h2>插件市场</h2>
@@ -199,6 +245,19 @@
 </div>
 
 <script>
+// 出任何 JS 错误都直接显示在页面上，方便在手机上排查
+window.onerror = function(msg, src, line){
+  var d = document.getElementById('jserr');
+  if (!d){
+    d = document.createElement('div');
+    d.id = 'jserr';
+    d.style.cssText = 'position:fixed;left:8px;right:8px;bottom:80px;z-index:99;'
+      + 'background:#7a1d1d;color:#fff;padding:8px 10px;border-radius:8px;'
+      + 'font:12px/1.4 monospace;white-space:pre-wrap';
+    document.body.appendChild(d);
+  }
+  d.textContent = 'JS错误: ' + msg + ' @' + line;
+};
 const $ = s => document.querySelector(s);
 const logEl = $('#log'), inp = $('#inp'), dot = $('#dot'), meta = $('#meta');
 
@@ -337,7 +396,8 @@ async function doPull(){
 }
 
 $('#pullBtn').onclick = doPull;
-$('#btnSetup').onclick = () => {
+const _bs = $('#btnSetup');
+if (_bs) _bs.onclick = () => {
   $('#tokInp').value = TOK;
   $('#setup').classList.remove('hide');
   if (TOK){ loadModels(); loadProviders(); loadPlugins(); }
@@ -620,6 +680,42 @@ async function addSource(){
 }
 
 $('#srcAdd').onclick = addSource;
+
+// ---- 抽屉 ----
+async function openDrawer(){
+  $('#drawer').classList.remove('hide');
+  try{
+    const j = await fetch('/api/info').then(r => r.json());
+    $('#dModel').textContent = j.model || '未配置模型';
+    $('#dInfo').innerHTML =
+      `上游 ${j.upstreams ? j.upstreams.length : 0} 个<br>` +
+      `策略 ${(j.strategies||[]).length} 条<br>` +
+      `build 1118-1237`;
+  }catch(e){ $('#dInfo').textContent = '连接信息读取失败'; }
+}
+function closeDrawer(){ $('#drawer').classList.add('hide'); }
+
+$('#btnMenu').onclick = openDrawer;
+$('#drawerScrim').onclick = closeDrawer;
+document.querySelectorAll('#drawer nav [data-act]').forEach(el => {
+  el.onclick = async () => {
+    const act = el.dataset.act;
+    closeDrawer();
+    if (act === 'new'){
+      logEl.innerHTML = '';
+      inp.value = ''; inp.focus();
+    } else if (act === 'plugins'){
+      await loadPlugins(); loadSources(); renderStore();
+      $('#store').classList.remove('hide');
+    } else if (act === 'setup'){
+      $('#tokInp').value = TOK;
+      $('#setup').classList.remove('hide');
+      if (TOK){ loadModels(); loadProviders(); loadPlugins(); }
+    } else if (act === 'reload'){
+      location.reload();
+    }
+  };
+});
 $('#plugSearch').oninput = e => { SEARCH_Q = e.target.value; renderStore(); };
 
 $('#storeBtn').onclick = async () => { await loadPlugins(); loadSources(); renderStore(); $('#store').classList.remove('hide'); };
